@@ -1,13 +1,31 @@
 ## Benang Merah Perpisahan: An Analysis of Indonesian Public Divorce Documents – Refined Implementation Plan
 
-### Project Structure
+### 1. Project Structure
 
 - Goal: Extract trends, emotions, and social signals from Indonesian public divorce documents.
 - Pipeline: Scraping → OCR → Preprocessing → NLP Analyses → Reporting
 
+#### High-Level Pipeline Flowchart
+
+```
+Data Collection
+     ↓
+    OCR
+     ↓
+Preprocessing
+     ↓
+   NLP Analyses
+     ↓
+Integration of NLP & EDA
+     ↓
+      EDA
+     ↓
+Reporting & Publishing
+```
+
 ---
 
-### 1. Data Collection & Metadata Extraction
+### 2. Data Collection & Metadata Extraction
 
 #### Source
 - Website: putusan3.mahkamahagung.go.id (Perceraian)
@@ -32,7 +50,7 @@ for page in pagination:
 
 ---
 
-### 2. OCR (for scanned PDFs)
+### 3. OCR (for scanned PDFs)
 
 #### Tooling
 - Primary: surya
@@ -46,7 +64,7 @@ for page in pagination:
 
 ---
 
-### 3. Text Preprocessing
+### 4. Text Preprocessing
 
 #### Techniques
 - Remove legal boilerplate and headers
@@ -62,7 +80,7 @@ for page in pagination:
 
 ---
 
-### 4. NLP Analyses
+### 5. NLP Analyses
 
 #### 1. Topic Modeling
 - Goal: Surface recurring case themes
@@ -97,9 +115,72 @@ for page in pagination:
   - Use gazetteer/geocoding (e.g., GeoNames)
   - Normalize district names (e.g., Tangerang vs Kota Tangerang)
 
+### 6. Integration of EDA and NLP Analyses
+
+For text-based projects, most meaningful EDA relies on structured features extracted by NLP analyses (e.g., topics, emotions, roles, outcomes). The following diagram and table illustrate how each EDA task depends on specific NLP outputs.
+
+#### Workflow Diagram
+
+```
+Raw Text + Metadata
+        |
+   [Preprocessing]
+        |
+   +-----------------------------+
+   | NLP Extraction              |
+   |                             |
+   |  +---------------------+    |
+   |  | Topic Modeling      |----+----> Topic Trends, Cluster Plots
+   |  +---------------------+    |
+   |  | Emotion Analysis    |----+----> Emotion Heatmaps by Section
+   |  +---------------------+    |
+   |  | Role Extraction     |----+----> Filing Trends by Gender/Region
+   |  |                    |    |         Occupational Demographics
+   |  +---------------------+    |
+   |  | Outcome Extraction  |----+----> Outcome Distributions
+   |  +---------------------+    |
+   |  | Demographic         |----+----> Occupational/Educational Demographics
+   |  | Extraction          |    |         Filing Trends by Gender/Region
+   |  +---------------------+    |
+   |  | Date/Event Extraction|---+----> Marriage/Divorce Timeline Analysis
+   |  +---------------------+    |         Duration Analysis
+   |  | Reason Extraction   |----+----> Reason/Conflict Frequency
+   |  +---------------------+    |
+   |  | Children Extraction |----+----> Children Involved Analysis
+   |  +---------------------+    |
+   +-----------------------------+
+        |
+   +-----------------------------+
+   | Metadata (Views/Downloads)  |----> Case Popularity Analysis
+   +-----------------------------+
+```
+
+#### Mapping: EDA Ideas and Their NLP Dependencies
+
+| EDA Analysis/Visualization                | Required NLP Output/Analysis                |
+|-------------------------------------------|---------------------------------------------|
+| Case Filing Trends Over Time              | Metadata (Tanggal Register, Tanggal Putusan) |
+| Gender Roles in Divorce Filings           | Role extraction (Pemohon/Termohon, gender)   |
+| Geographic Distribution                   | Location extraction (court, residence)       |
+| Amar Putusan Outcome Frequency            | Outcome extraction/classification (Amar)     |
+| Duration Analysis                         | Metadata (Tanggal Register, Tanggal Dibacakan)|
+| Occupational Demographics                 | Occupation extraction from text              |
+| Educational Background Distribution       | Education extraction from text               |
+| Marriage Duration Before Divorce          | Metadata + date extraction from text         |
+| Children Involved in Divorce              | Children count extraction from text          |
+| Reason/Conflict Type Frequency            | Reason/conflict extraction from Duduk Perkara|
+| Case Popularity Analysis                  | Metadata (page views, downloads)             |
+| Topic Cluster Plots                       | Topic modeling (BERTopic, topic labels)      |
+| Section-based Emotion Charts              | Emotion analysis/classification by section   |
+| Filing Trends by Gender/Region            | Role extraction + location extraction        |
+| Amar Outcome Distributions                | Outcome extraction/classification            |
+| Timeline of Marriage–Conflict–Separation  | Date extraction + event extraction           |
+
 ---
 
-## Exploratory Data Analysis (EDA) Ideas
+### 7. Exploratory Data Analysis (EDA) Ideas
+
+> **Note:** Most EDA ideas below depend on structured features extracted by NLP analyses. See Section 6 (Integration of EDA and NLP Analyses) for a mapping of dependencies.
 
 ### 1. Case Filing Trends Over Time
 - Plot: Number of divorce filings per month/year
@@ -254,7 +335,7 @@ JSON is thus a robust, flexible, and well-supported choice for this project's da
 
 ---
 
-### 5. Reporting and Distribution
+### 10. Reporting and Distribution
 
 #### Deliverables
 - Medium article (methods and insights)
@@ -271,7 +352,7 @@ JSON is thus a robust, flexible, and well-supported choice for this project's da
 
 ---
 
-### 6. Ethics, Privacy, and Storage
+### 11. Ethics, Privacy, and Storage
 
 #### Privacy
 - Redact all personal identifiers
@@ -285,7 +366,7 @@ JSON is thus a robust, flexible, and well-supported choice for this project's da
 
 ---
 
-### 7. Dataset Publishing Plan
+### 12. Dataset Publishing Plan
 
 #### Platforms
 - Publish processed datasets on Kaggle and HuggingFace Datasets
@@ -312,7 +393,7 @@ JSON is thus a robust, flexible, and well-supported choice for this project's da
 
 ---
 
-### Updated Checklist
+### 13. Updated Checklist
 
 - [ ] Scrape 50–100 sample cases and metadata
 - [ ] Run OCR and evaluate accuracy (especially fragmented layout)
@@ -322,5 +403,3 @@ JSON is thus a robust, flexible, and well-supported choice for this project's da
 - [ ] Analyze and visualize page views and downloads
 - [ ] Publish pilot report on GitHub and Medium
 - [ ] Release dataset on Kaggle and HuggingFace with documentation
-
-```
