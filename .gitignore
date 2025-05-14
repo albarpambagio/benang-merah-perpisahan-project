@@ -10,3 +10,12 @@ wheels/
 .venv
 docs/*
 !docs/implementation_plan.md
+
+# Scraper output and logs
+scraper/*.pdf
+scraper/*.zip
+scraper/*.ndjson
+scraper/*.csv
+scraper/*.log
+scraper/__pycache__/
+scraper/downloads/

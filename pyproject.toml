@@ -4,4 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "beautifulsoup4>=4.13.4",
+    "pandas>=2.2.3",
+    "scrapling>=0.2.99",
+    "tenacity>=9.1.2",
+]
