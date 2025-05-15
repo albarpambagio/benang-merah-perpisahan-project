@@ -5,8 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "aiofiles>=24.1.0",
     "beautifulsoup4>=4.13.4",
     "pandas>=2.2.3",
+    "psutil>=7.0.0",
+    "pypdf2>=3.0.1",
     "scrapling>=0.2.99",
     "tenacity>=9.1.2",
 ]

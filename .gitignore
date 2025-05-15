@@ -19,3 +19,4 @@ scraper/*.csv
 scraper/*.log
 scraper/__pycache__/
 scraper/downloads/
+scraper/estimate_result.txt
