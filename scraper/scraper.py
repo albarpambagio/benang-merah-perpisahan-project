@@ -397,47 +397,23 @@ def get_file_checksum(filepath: Path) -> str:
     return hash_md5.hexdigest()
 
 async def download_pdf_with_retry(session, pdf_url, case_url):
-    """Download PDF with retry logic and detailed logging."""
+    """Download PDF with retry logic (simple version)."""
     for attempt in range(3):
         try:
             pdf_filename = DOWNLOAD_DIR / Path(pdf_url).name
-            logging.info(f"Attempting PDF download (attempt {attempt+1}/3): {pdf_url}")
-            
             async with session.get(pdf_url, headers=get_random_headers(), timeout=aiohttp.ClientTimeout(total=30)) as pdf_response:
                 if pdf_response.status == 200:
-                    content_type = pdf_response.headers.get('Content-Type', '')
-                    content_length = pdf_response.headers.get('Content-Length', '0')
-                    
-                    logging.info(f"PDF response headers - Type: {content_type}, Length: {content_length}")
-                    
-                    if 'application/pdf' not in content_type.lower():
-                        logging.error(f"Invalid content type for PDF: {content_type}")
-                        continue
-                        
                     async with aiofiles.open(pdf_filename, 'wb') as f:
                         await f.write(await pdf_response.read())
-                    
-                    # Validate PDF after download
-                    if not is_valid_pdf(pdf_filename):
-                        logging.error(f"Invalid PDF downloaded: {pdf_filename}")
-                        os.remove(pdf_filename)  # Remove invalid PDF
-                        continue
-                        
-                    # Calculate and store checksum
-                    checksum = get_file_checksum(pdf_filename)
-                    checksum_file = pdf_filename.with_suffix('.md5')
-                    async with aiofiles.open(checksum_file, 'w') as f:
-                        await f.write(checksum)
-                    
-                    logging.info(f"PDF successfully downloaded and validated: {pdf_filename}")
+                    logging.info(f"PDF downloaded: {pdf_filename}")
                     return str(pdf_filename)
                 else:
                     logging.error(f"HTTP {pdf_response.status} downloading PDF: {pdf_url}")
-                    if attempt < 2:  # Don't sleep on last attempt
+                    if attempt < 2:
                         await asyncio.sleep(min(30, 2 ** attempt + random.uniform(0, 2)))
         except Exception as e:
             logging.error(f"Error downloading PDF {pdf_url}: {str(e)}")
-            if attempt < 2:  # Don't sleep on last attempt
+            if attempt < 2:
                 await asyncio.sleep(min(30, 2 ** attempt + random.uniform(0, 2)))
     return None
 
@@ -522,7 +498,6 @@ async def extract_case_metadata_and_pdf(session, semaphore, case_info):
                     tds = tr.find_all('td')
                     if len(tds) == 2:
                         key = tds[0].get_text(strip=True)
-                        # For multi-line/HTML fields, preserve line breaks
                         if key == 'Catatan Amar':
                             value = tds[1].get_text(separator='\n', strip=True)
                         else:
@@ -531,46 +506,33 @@ async def extract_case_metadata_and_pdf(session, semaphore, case_info):
                         if field:
                             setattr(metadata, field, value)
                 logging.info(f"Extracted metadata fields for {metadata.case_url}")
-            # Extract PDF download link with better logging
+            # Extract PDF download link
             pdf_url = None
             for a in soup.find_all('a', href=True):
                 href = a['href']
                 if '/download_file/' in href:
                     if '/pdf/' in href or a.text.strip().lower().endswith('.pdf'):
                         pdf_url = urljoin(case_info['case_url'], href)
-                        logging.info(f"Found PDF link: {pdf_url}")
                         break
-            
             metadata.pdf_url = pdf_url
-            
             # Download PDF if found
             if pdf_url:
                 try:
                     pdf_filename = await download_pdf_with_retry(session, pdf_url, case_info['case_url'])
                     if pdf_filename:
                         metadata.pdf_filename = pdf_filename
-                        logging.info(f"PDF saved and validated: {pdf_filename}")
+                        logging.info(f"PDF saved: {pdf_filename}")
                     else:
-                        logging.error(f"Failed to download valid PDF for {case_info['case_url']}")
+                        logging.error(f"Failed to download PDF for {case_info['case_url']}")
                         metadata.pdf_filename = None
-                        # Record failed PDF with more details
                         async with aiofiles.open(FAILED_PDF_FILE, 'a', encoding='utf-8') as fail_f:
-                            await fail_f.write(
-                                f"{case_info['case_url']}\t{pdf_url}\t"
-                                f"Failed after 3 attempts\t"
-                                f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                            )
+                            await fail_f.write(f"{case_info['case_url']}\t{pdf_url}\tFailed after 3 attempts\t{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                             await fail_f.flush()
                 except Exception as e:
                     logging.error(f"Error downloading PDF {pdf_url}: {str(e)}")
                     metadata.pdf_filename = None
-                    # Record failed PDF with more details
                     async with aiofiles.open(FAILED_PDF_FILE, 'a', encoding='utf-8') as fail_f:
-                        await fail_f.write(
-                            f"{case_info['case_url']}\t{pdf_url}\t"
-                            f"Exception: {str(e)}\t"
-                            f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        )
+                        await fail_f.write(f"{case_info['case_url']}\t{pdf_url}\tException: {str(e)}\t{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                         await fail_f.flush()
             else:
                 logging.warning(f"No PDF found for case: {case_info['case_url']}")
@@ -590,6 +552,8 @@ class StatsTracker:
         
     def get_summary(self) -> str:
         elapsed = time.time() - self.start_time
+        pdf_attempts = self.pdf_success + self.pdf_fail
+        pdf_rate = (self.pdf_success / pdf_attempts * 100) if pdf_attempts > 0 else 0.0
         return (
             f"\nScraping complete!\n"
             f"Total cases attempted: {self.attempted}\n"
@@ -599,7 +563,7 @@ class StatsTracker:
             f"PDF downloads failed: {self.pdf_fail}\n"
             f"Total time: {elapsed:.1f} seconds\n"
             f"Success rate: {(self.success / self.attempted * 100):.1f}%\n"
-            f"PDF success rate: {(self.pdf_success / (self.pdf_success + self.pdf_fail) * 100):.1f}%"
+            f"PDF success rate: {pdf_rate:.1f}%"
         )
 
 # Update process_case_batch_stats to use StatsTracker
