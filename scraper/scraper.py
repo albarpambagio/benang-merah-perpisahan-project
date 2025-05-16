@@ -44,11 +44,14 @@ try:
 except ImportError:
     pass
 
-# Configure logging
+# Logging: file + console
 logging.basicConfig(
-    filename='scraper.log',
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s (%(filename)s:%(lineno)d)'
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler('scraper.log'),
+        logging.StreamHandler()
+    ]
 )
 
 USER_AGENTS = [
@@ -107,67 +110,13 @@ def is_valid_pdf(filepath: Path) -> bool:
 @dataclass
 class CaseMetadata:
     case_url: str
-    register_date: Optional[str] = None
-    putus_date: Optional[str] = None
-    upload_date: Optional[str] = None
     pdf_url: Optional[str] = None
     pdf_filename: Optional[str] = None
     nomor: Optional[str] = None
-    tingkat_proses: Optional[str] = None
-    klasifikasi: Optional[str] = None
-    kata_kunci: Optional[str] = None
-    tahun: Optional[str] = None
-    tanggal_register: Optional[str] = None
-    lembaga_peradilan: Optional[str] = None
-    jenis_lembaga_peradilan: Optional[str] = None
-    hakim_ketua: Optional[str] = None
-    hakim_anggota: Optional[str] = None
-    panitera: Optional[str] = None
-    amar: Optional[str] = None
-    amar_lainnya: Optional[str] = None
-    catatan_amar: Optional[str] = None
-    tanggal_musyawarah: Optional[str] = None
-    tanggal_dibacakan: Optional[str] = None
-    nomor_perkara: Optional[str] = None
-    jenis_perkara: Optional[str] = None
-    pengadilan: Optional[str] = None
     tanggal_putus: Optional[str] = None
-    # Add more as needed
-
+    pengadilan: Optional[str] = None
     def to_dict(self) -> Dict:
         return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'CaseMetadata':
-        return cls(
-            case_url=data.get('case_url'),
-            register_date=data.get('register_date'),
-            putus_date=data.get('putus_date'),
-            upload_date=data.get('upload_date'),
-            pdf_url=data.get('pdf_url'),
-            pdf_filename=data.get('pdf_filename'),
-            nomor=data.get('nomor'),
-            tingkat_proses=data.get('tingkat_proses'),
-            klasifikasi=data.get('klasifikasi'),
-            kata_kunci=data.get('kata_kunci'),
-            tahun=data.get('tahun'),
-            tanggal_register=data.get('tanggal_register'),
-            lembaga_peradilan=data.get('lembaga_peradilan'),
-            jenis_lembaga_peradilan=data.get('jenis_lembaga_peradilan'),
-            hakim_ketua=data.get('hakim_ketua'),
-            hakim_anggota=data.get('hakim_anggota'),
-            panitera=data.get('panitera'),
-            amar=data.get('amar'),
-            amar_lainnya=data.get('amar_lainnya'),
-            catatan_amar=data.get('catatan_amar'),
-            tanggal_musyawarah=data.get('tanggal_musyawarah'),
-            tanggal_dibacakan=data.get('tanggal_dibacakan'),
-            nomor_perkara=data.get('nomor_perkara'),
-            jenis_perkara=data.get('jenis_perkara'),
-            pengadilan=data.get('pengadilan'),
-            tanggal_putus=data.get('tanggal_putus'),
-            # Add more as needed
-        )
 
 # Helper to map table keys to schema fields
 TABLE_KEY_MAP = {
@@ -330,8 +279,8 @@ COMPLETED_FILE = Path("data/completed_cases.txt")
 
 # Adaptive rate/delay globals
 RATE_LIMIT_CALLS = 10
-MIN_DELAY = 1
-MAX_DELAY = 2
+MIN_DELAY = 2
+MAX_DELAY = 5
 
 # Adaptive tuning parameters
 recent_errors = []
@@ -455,21 +404,37 @@ async def get_case_links_with_pagination(session, base_url, max_docs, start_page
             record_result(True, elapsed)
             soup = BeautifulSoup(html, 'html.parser')
             new_links = []
-            # Find all case blocks
-            for spost in soup.find_all('div', class_='spost'):
-                entry_c = spost.find('div', class_='entry-c')
-                if not entry_c:
-                    continue
-                # Find the case link
-                a_tag = entry_c.find('a', href=True)
+
+            # 1. Extract from div.spost.clearfix blocks (main case list)
+            for spost_div in soup.select('div.spost.clearfix'):
+                # Find the first <a> tag that links to a case detail
+                a_tag = spost_div.find('a', href=True)
                 if a_tag and '/direktori/putusan/' in a_tag['href'] and a_tag['href'].endswith('.html'):
                     case_url = urljoin(page_url, a_tag['href'])
-                    new_links.append({
-                        'case_url': case_url
-                    })
-                    if len(case_links) + len(new_links) >= max_docs:
-                        break
+                    new_links.append({'case_url': case_url})
+
+            # 2. (existing) Table rows
+            for tr in soup.find_all('tr'):
+                a_tag = tr.find('a', href=True)
+                if a_tag and '/direktori/putusan/' in a_tag['href'] and a_tag['href'].endswith('.html'):
+                    case_url = urljoin(page_url, a_tag['href'])
+                    new_links.append({'case_url': case_url})
+
+            # 3. (existing) Other containers
+            for container in soup.find_all(['div', 'article', 'section']):
+                for a_tag in container.find_all('a', href=True):
+                    if '/direktori/putusan/' in a_tag['href'] and a_tag['href'].endswith('.html'):
+                        case_url = urljoin(page_url, a_tag['href'])
+                        new_links.append({'case_url': case_url})
+
+            # Remove duplicates while preserving order
+            seen = set()
+            new_links = [x for x in new_links if not (x['case_url'] in seen or seen.add(x['case_url']))]
+
             case_links.extend(new_links)
+            if len(case_links) >= max_docs:
+                break
+
         except Exception as e:
             elapsed = time.time() - start
             record_result(False, elapsed)
@@ -483,62 +448,39 @@ async def get_case_links_with_pagination(session, base_url, max_docs, start_page
     logging.info(f"Total case links found: {len(case_links)}")
     return case_links[:max_docs]
 
-async def extract_case_metadata_and_pdf(session, semaphore, case_info):
-    metadata = CaseMetadata(
-        case_url=case_info['case_url']
-    )
-    async with semaphore:
-        try:
-            html = await fetch_with_retry(session, case_info['case_url'])
-            await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
-            soup = BeautifulSoup(html, 'html.parser')
-            table = soup.find('table', class_='table')
-            if table:
-                for tr in table.find_all('tr'):
-                    tds = tr.find_all('td')
-                    if len(tds) == 2:
-                        key = tds[0].get_text(strip=True)
-                        if key == 'Catatan Amar':
-                            value = tds[1].get_text(separator='\n', strip=True)
-                        else:
-                            value = tds[1].get_text(strip=True)
-                        field = TABLE_KEY_MAP.get(key)
-                        if field:
-                            setattr(metadata, field, value)
-                logging.info(f"Extracted metadata fields for {metadata.case_url}")
-            # Extract PDF download link
-            pdf_url = None
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if '/download_file/' in href:
-                    if '/pdf/' in href or a.text.strip().lower().endswith('.pdf'):
-                        pdf_url = urljoin(case_info['case_url'], href)
-                        break
-            metadata.pdf_url = pdf_url
-            # Download PDF if found
-            if pdf_url:
-                try:
-                    pdf_filename = await download_pdf_with_retry(session, pdf_url, case_info['case_url'])
-                    if pdf_filename:
-                        metadata.pdf_filename = pdf_filename
-                        logging.info(f"PDF saved: {pdf_filename}")
-                    else:
-                        logging.error(f"Failed to download PDF for {case_info['case_url']}")
-                        metadata.pdf_filename = None
-                        async with aiofiles.open(FAILED_PDF_FILE, 'a', encoding='utf-8') as fail_f:
-                            await fail_f.write(f"{case_info['case_url']}\t{pdf_url}\tFailed after 3 attempts\t{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                            await fail_f.flush()
-                except Exception as e:
-                    logging.error(f"Error downloading PDF {pdf_url}: {str(e)}")
-                    metadata.pdf_filename = None
-                    async with aiofiles.open(FAILED_PDF_FILE, 'a', encoding='utf-8') as fail_f:
-                        await fail_f.write(f"{case_info['case_url']}\t{pdf_url}\tException: {str(e)}\t{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                        await fail_f.flush()
-            else:
-                logging.warning(f"No PDF found for case: {case_info['case_url']}")
-        except Exception as e:
-            logging.error(f"Error processing case {case_info['case_url']}: {str(e)}")
-            raise
+async def extract_case_metadata_and_pdf(session, case_info):
+    metadata = CaseMetadata(case_url=case_info['case_url'])
+    html = await fetch_with_retry(session, case_info['case_url'])
+    soup = BeautifulSoup(html, 'html.parser')
+    table = soup.find('table', class_='table')
+    if table:
+        for tr in table.find_all('tr'):
+            tds = tr.find_all('td')
+            if len(tds) == 2:
+                key = tds[0].get_text(strip=True)
+                value = tds[1].get_text(strip=True)
+                if key == 'Nomor':
+                    metadata.nomor = value
+                elif key == 'Tanggal Putus':
+                    metadata.tanggal_putus = value
+                elif key == 'Pengadilan':
+                    metadata.pengadilan = value
+    # Extract PDF link
+    pdf_url = None
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+        if '/download_file/' in href:
+            pdf_url = urljoin(case_info['case_url'], href)
+            break
+    metadata.pdf_url = pdf_url
+    # Improved PDF naming
+    if pdf_url:
+        nomor = metadata.nomor or 'unknown'
+        pengadilan = (metadata.pengadilan or 'unknown').replace(' ', '_')
+        pdf_filename = DOWNLOAD_DIR / f"{nomor}_{pengadilan}.pdf"
+        ok = await download_pdf_with_retry(session, pdf_url, case_info['case_url'])
+        if ok:
+            metadata.pdf_filename = ok
     return metadata.to_dict()
 
 class StatsTracker:
@@ -571,7 +513,7 @@ async def process_case_batch_stats(session, semaphore, case_batch, completed, st
     tasks = []
     for case_info in case_batch:
         if case_info['case_url'] not in completed:
-            tasks.append(extract_case_metadata_and_pdf(session, semaphore, case_info))
+            tasks.append(extract_case_metadata_and_pdf(session, case_info))
     results = []
     async with aiofiles.open(METADATA_NDJSON, 'a', encoding='utf-8') as ndjson_f, \
                aiofiles.open(COMPLETED_FILE, 'a', encoding='utf-8') as completed_f:
@@ -696,4 +638,3 @@ if __name__ == "__main__":
 
 # Future improvements:
 # - Use PlayWrightFetcher or StealthyFetcher for anti-bot
-# - Use Scrapling's advanced selectors for unstable or complex sites 
