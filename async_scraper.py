@@ -7,12 +7,14 @@ import json
 from typing import List
 import random
 import traceback
+import logging
+from tqdm.asyncio import tqdm
 
 BASE_URL = "https://putusan3.mahkamahagung.go.id/direktori/index/kategori/perceraian.html"
 OUTPUT_JSON = "output_async.jsonl"
 PDF_DIR = "pdfs_async"
 MAX_PAGES = 1  # For debugging, only process 1 page
-CONCURRENT_WORKERS = 1  # For debugging, only 1 worker
+CONCURRENT_WORKERS = 8  # For debugging, only 1 worker
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 MyScraper/1.0'
 
 os.makedirs(PDF_DIR, exist_ok=True)
@@ -43,22 +45,32 @@ HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler('scraper.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
 async def get_soup(client: httpx.AsyncClient, url: str) -> BeautifulSoup:
-    print(f"Fetching page: {url}")
+    logging.info(f"Fetching page: {url}")
     try:
         resp = await client.get(url)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
-        print(f"  Error fetching {url}: {e}")
+        logging.error(f"Error fetching {url}: {e}")
         raise
 
 async def download_pdf(client: httpx.AsyncClient, pdf_url: str, filename: str) -> str:
     path = os.path.join(PDF_DIR, filename)
     if os.path.exists(path):
-        print(f"  PDF already exists: {filename}")
+        logging.info(f"PDF already exists: {filename}")
         return path
-    print(f"  Downloading PDF: {pdf_url} -> {filename}")
+    logging.info(f"Downloading PDF: {pdf_url} -> {filename}")
     try:
         async with client.stream("GET", pdf_url) as r:
             r.raise_for_status()
@@ -67,7 +79,7 @@ async def download_pdf(client: httpx.AsyncClient, pdf_url: str, filename: str) -
                     await f.write(chunk)
         return path
     except Exception as e:
-        print(f"    Error downloading PDF {pdf_url}: {e}")
+        logging.error(f"Error downloading PDF {pdf_url}: {e}")
         raise
 
 def extract_case_links(soup: BeautifulSoup) -> List[str]:
@@ -85,7 +97,7 @@ def find_next_page(soup: BeautifulSoup) -> str:
     return None
 
 async def parse_case(client: httpx.AsyncClient, case_url: str) -> dict:
-    print(f"  Parsing case: {case_url}")
+    logging.info(f"Parsing case: {case_url}")
     soup = await get_soup(client, case_url)
     item = {}
     table = soup.select_one('div.tab-content.ui-tabs-panel table.table')
@@ -186,7 +198,7 @@ async def write_jsonl(item, lock):
 async def worker(case_url, client, lock, stats, max_retries=5):
     for attempt in range(max_retries):
         try:
-            print(f"[Worker] Attempt {attempt+1} for {case_url}")
+            logging.info(f"[Worker] Attempt {attempt+1} for {case_url}")
             item = await parse_case(client, case_url)
             await write_jsonl(item, lock)
             stats['total_cases'] += 1
@@ -195,66 +207,63 @@ async def worker(case_url, client, lock, stats, max_retries=5):
             if not item['is_complete']:
                 stats['incomplete_cases'] += 1
             break  # Success, exit retry loop
-        except (httpx.HTTPStatusError, httpx.RequestError) as e:
-            code = getattr(e.response, 'status_code', None)
-            print(f"    HTTP error on {case_url}: {e} (status: {code})")
-            if code and 500 <= code < 600 and attempt < max_retries - 1:
-                wait = 2 ** attempt + random.uniform(1, 2)
-                print(f"    Retrying in {wait:.2f}s (attempt {attempt+1})")
-                await asyncio.sleep(wait)
-                continue
-            stats['errors'].append({'url': case_url, 'error': str(e), 'trace': traceback.format_exc()})
+        except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException) as e:
+            code = getattr(getattr(e, 'response', None), 'status_code', None)
+            logging.error(f"HTTP/network error on {case_url}: {type(e).__name__}: {e} (status: {code})")
+            if (code and 500 <= code < 600) or isinstance(e, httpx.TimeoutException):
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt + random.uniform(1, 2)
+                    logging.info(f"Retrying in {wait:.2f}s (attempt {attempt+1})")
+                    await asyncio.sleep(wait)
+                    continue
+            stats['errors'].append({'url': case_url, 'error': str(e), 'type': type(e).__name__, 'trace': traceback.format_exc()})
             break
         except Exception as e:
-            print(f"    Error scraping {case_url}: {e}")
-            stats['errors'].append({'url': case_url, 'error': str(e), 'trace': traceback.format_exc()})
+            logging.error(f"Error scraping {case_url}: {e}")
+            stats['errors'].append({'url': case_url, 'error': str(e), 'type': type(e).__name__, 'trace': traceback.format_exc()})
             break
-        # Increased politeness delay
         await asyncio.sleep(random.uniform(2.0, 3.0))
     else:
-        print(f"    Failed after {max_retries} attempts: {case_url}")
+        logging.error(f"Failed after {max_retries} attempts: {case_url}")
 
 async def main():
+    logging.info("Scraper started.")
     page_url = BASE_URL
     all_case_urls = []
     async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
         for page in range(1, MAX_PAGES + 1):
-            print(f"Processing page {page}: {page_url}")
+            logging.info(f"Processing page {page}: {page_url}")
             try:
                 soup = await get_soup(client, page_url)
             except Exception as e:
-                print(f"  Failed to fetch page {page_url}: {e}")
+                logging.error(f"Failed to fetch page {page_url}: {e}")
                 break
             case_urls = extract_case_links(soup)
-            print(f"  Found {len(case_urls)} case links on page {page}")
+            logging.info(f"Found {len(case_urls)} case links on page {page}")
             all_case_urls.extend(case_urls)
             next_page = find_next_page(soup)
             if not next_page:
-                print("  No next page found.")
+                logging.info("No next page found.")
                 break
             page_url = next_page
     # Concurrency
     lock = asyncio.Lock()
     stats = {'total_cases': 0, 'pdfs_downloaded': 0, 'incomplete_cases': 0, 'errors': []}
-    tasks = []
     sem = asyncio.Semaphore(CONCURRENT_WORKERS)
     async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
         async def sem_worker(url):
             async with sem:
                 await worker(url, client, lock, stats)
-        tasks = [asyncio.create_task(sem_worker(url)) for url in all_case_urls]
-        await asyncio.gather(*tasks)
-    print(f"""
-Summary:
-  - Cases scraped: {stats['total_cases']}
-  - PDFs downloaded: {stats['pdfs_downloaded']}
-  - Incomplete cases: {stats['incomplete_cases']}
-  - Errors: {len(stats['errors'])}
-""")
+        # Progress bar for async tasks
+        tasks = [sem_worker(url) for url in all_case_urls]
+        for f in tqdm.as_completed(tasks, total=len(tasks), desc='Cases processed'):
+            await f
+    logging.info(f"Summary: Cases scraped: {stats['total_cases']}, PDFs downloaded: {stats['pdfs_downloaded']}, Incomplete cases: {stats['incomplete_cases']}, Errors: {len(stats['errors'])}")
     if stats['errors']:
-        print("Some errors occurred:")
+        logging.error("Some errors occurred:")
         for err in stats['errors']:
-            print(f"  {err['url']}: {err['error']}")
+            logging.error(f"  {err['url']}: {err['error']}")
+    logging.info("Scraper finished.")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
