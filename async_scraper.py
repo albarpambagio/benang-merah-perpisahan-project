@@ -14,7 +14,7 @@ BASE_URL = "https://putusan3.mahkamahagung.go.id/direktori/index/kategori/percer
 OUTPUT_JSON = "output_async.jsonl"
 PDF_DIR = "pdfs_async"
 MAX_PAGES = 1  # For debugging, only process 1 page
-CONCURRENT_WORKERS = 8  # For debugging, only 1 worker
+CONCURRENT_WORKERS = 5  # For debugging, only 1 worker
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 MyScraper/1.0'
 
 os.makedirs(PDF_DIR, exist_ok=True)
@@ -190,39 +190,84 @@ async def parse_case(client: httpx.AsyncClient, case_url: str) -> dict:
     item['validation_errors'] = errors
     return item
 
-async def write_jsonl(item, lock):
+# --- Batch writing buffer size ---
+BATCH_SIZE = 10
+
+async def write_jsonl_batch(items, lock):
+    if not items:
+        return
     async with lock:
         async with aiofiles.open(OUTPUT_JSON, 'a', encoding='utf-8') as f:
-            await f.write(json.dumps(item, ensure_ascii=False) + '\n')
+            for item in items:
+                await f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
-async def worker(case_url, client, lock, stats, max_retries=5):
+async def worker(case_url, client, lock, stats, batch, batch_lock, max_retries=5):
     for attempt in range(max_retries):
         try:
             logging.info(f"[Worker] Attempt {attempt+1} for {case_url}")
+            # Check for duplicate PDF before parsing
+            # We'll parse only the PDF link section first
+            soup = await get_soup(client, case_url)
+            pdf_url = None
+            pdf_filename = None
+            for card in soup.select('div.card.bg-success.mb-3'):
+                for span in card.select('span'):
+                    icon = span.find('i', class_='icon-files')
+                    if icon and 'Download PDF' in span.get_text(strip=True):
+                        for a in card.select('a'):
+                            link_text = a.get_text(strip=True)
+                            if link_text.endswith('.pdf'):
+                                pdf_url = a.get('href')
+                                pdf_filename = link_text
+                                break
+                        if pdf_url:
+                            break
+                if pdf_url:
+                    break
+            if pdf_url and pdf_filename:
+                safe_filename = pdf_filename.replace('/', '_').replace(' ', '_')
+                if not safe_filename.lower().endswith('.pdf'):
+                    safe_filename += '.pdf'
+                pdf_path = os.path.join(PDF_DIR, safe_filename)
+                if os.path.exists(pdf_path):
+                    logging.info(f"PDF already exists for {case_url}, skipping case.")
+                    stats['pdfs_downloaded'] += 1
+                    stats['total_cases'] += 1
+                    return  # Skip this case
+            # Now parse the full case
             item = await parse_case(client, case_url)
-            await write_jsonl(item, lock)
+            # Batch writing
+            async with batch_lock:
+                batch.append(item)
+                if len(batch) >= BATCH_SIZE:
+                    await write_jsonl_batch(batch, lock)
+                    batch.clear()
             stats['total_cases'] += 1
             if item.get('pdf_path'):
                 stats['pdfs_downloaded'] += 1
             if not item['is_complete']:
                 stats['incomplete_cases'] += 1
             break  # Success, exit retry loop
-        except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException) as e:
+        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.RequestError) as e:
             code = getattr(getattr(e, 'response', None), 'status_code', None)
-            logging.error(f"HTTP/network error on {case_url}: {type(e).__name__}: {e} (status: {code})")
-            if (code and 500 <= code < 600) or isinstance(e, httpx.TimeoutException):
+            # Only retry on timeouts and 5xx errors
+            if (isinstance(e, httpx.TimeoutException) or (code and 500 <= code < 600)):
+                logging.error(f"HTTP/network error on {case_url}: {type(e).__name__}: {e} (status: {code})")
                 if attempt < max_retries - 1:
                     wait = 2 ** attempt + random.uniform(1, 2)
                     logging.info(f"Retrying in {wait:.2f}s (attempt {attempt+1})")
                     await asyncio.sleep(wait)
                     continue
+            else:
+                # 4xx or other errors: log and skip
+                logging.error(f"Permanent error on {case_url}: {type(e).__name__}: {e} (status: {code})")
             stats['errors'].append({'url': case_url, 'error': str(e), 'type': type(e).__name__, 'trace': traceback.format_exc()})
             break
         except Exception as e:
             logging.error(f"Error scraping {case_url}: {e}")
             stats['errors'].append({'url': case_url, 'error': str(e), 'type': type(e).__name__, 'trace': traceback.format_exc()})
             break
-        await asyncio.sleep(random.uniform(2.0, 3.0))
+        await asyncio.sleep(random.uniform(1.0, 1.5))  # Reduced politeness delay
     else:
         logging.error(f"Failed after {max_retries} attempts: {case_url}")
 
@@ -246,18 +291,22 @@ async def main():
                 logging.info("No next page found.")
                 break
             page_url = next_page
-    # Concurrency
+    # Deduplicate URLs
+    all_case_urls = list(dict.fromkeys(all_case_urls))
     lock = asyncio.Lock()
+    batch_lock = asyncio.Lock()
+    batch = []
     stats = {'total_cases': 0, 'pdfs_downloaded': 0, 'incomplete_cases': 0, 'errors': []}
     sem = asyncio.Semaphore(CONCURRENT_WORKERS)
     async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
         async def sem_worker(url):
             async with sem:
-                await worker(url, client, lock, stats)
-        # Progress bar for async tasks
+                await worker(url, client, lock, stats, batch, batch_lock)
         tasks = [sem_worker(url) for url in all_case_urls]
         for f in tqdm.as_completed(tasks, total=len(tasks), desc='Cases processed'):
             await f
+    # Write any remaining items in the batch
+    await write_jsonl_batch(batch, lock)
     logging.info(f"Summary: Cases scraped: {stats['total_cases']}, PDFs downloaded: {stats['pdfs_downloaded']}, Incomplete cases: {stats['incomplete_cases']}, Errors: {len(stats['errors'])}")
     if stats['errors']:
         logging.error("Some errors occurred:")
