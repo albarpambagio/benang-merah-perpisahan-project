@@ -28,3 +28,5 @@ Thumbs.db
 
 docs/*
 !docs/implementation_plan.md
+
+todo.md
