@@ -16,19 +16,21 @@ from collections import deque
 import gc
 import psutil
 from datetime import datetime
+import hashlib
 
 # Configuration Constants
 BASE_URL = "https://putusan3.mahkamahagung.go.id/direktori/index/kategori/perceraian.html"
 OUTPUT_JSON = "test_output.jsonl"
 PDF_DIR = "test_pdfs"
 MAX_PAGES = 2  # Test with small number first
-INITIAL_CONCURRENT_WORKERS = 5  # More balanced starting point
+INITIAL_CONCURRENT_WORKERS = 3  # Lower initial concurrency
 PAGE_BATCH_SIZE = 2
 # Update timeout configuration at the top of the file
 CONNECT_TIMEOUT = 10.0  # Time to establish connection
-READ_TIMEOUT = 45.0    # Time to wait for server response
+READ_TIMEOUT = 45.0    # Time to wait for server response (HTML)
 WRITE_TIMEOUT = 20.0   # Time to send request
 POOL_TIMEOUT = 10.0    # Time to wait for connection from pool
+PDF_READ_TIMEOUT = 90.0  # Separate, longer timeout for PDF downloads
 
 # Replace simple REQUEST_TIMEOUT with detailed configuration
 REQUEST_TIMEOUT = httpx.Timeout(
@@ -37,10 +39,17 @@ REQUEST_TIMEOUT = httpx.Timeout(
     write=WRITE_TIMEOUT,
     pool=POOL_TIMEOUT
 )
+PDF_REQUEST_TIMEOUT = httpx.Timeout(
+    connect=CONNECT_TIMEOUT,
+    read=PDF_READ_TIMEOUT,
+    write=WRITE_TIMEOUT,
+    pool=POOL_TIMEOUT
+)
 POLITENESS_DELAY = (1.0, 2.0)  # More aggressive but still polite
 BATCH_SIZE = 10
 CHECKPOINT_FILE = 'test_checkpoint.txt'
 MAX_RETRIES = 5  # Increased from 3
+MAX_PDF_RETRIES = 5  # Specialized retry for PDFs
 RETRY_DELAYS = [2, 5, 10, 20, 30]  # More retry stages
 MAX_CONCURRENT_PDF_DOWNLOADS = 3
 MAX_PENDING_TASKS = 15  # Increased from 10
@@ -48,6 +57,10 @@ MEMORY_THRESHOLD = 85  # Slightly higher threshold
 MIN_CONCURRENCY = 2  # Never drop below this
 MAX_CONCURRENCY = 10  # Absolute maximum
 RESPONSE_TIME_TARGET = 4.0  # Target response time in seconds
+CONCURRENCY_ADJUST_INTERVAL = 60  # Gradual concurrency adjustment (seconds)
+CIRCUIT_BREAKER_WINDOW = 30  # Number of requests to consider for circuit breaker
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 0.5  # 50% failure rate triggers breaker
+CIRCUIT_BREAKER_COOLDOWN = 60  # seconds to pause when breaker is open
 
 # Enhanced User Agents
 USER_AGENTS = [
@@ -77,6 +90,18 @@ class ScraperStats:
     response_times: Deque[float] = field(default_factory=lambda: deque(maxlen=50))
     current_concurrency: int = INITIAL_CONCURRENT_WORKERS
     active_tasks: int = 0
+    # Enhanced metrics
+    html_success: int = 0
+    html_fail: int = 0
+    pdf_success: int = 0
+    pdf_fail: int = 0
+    recent_statuses: Deque[int] = field(default_factory=lambda: deque(maxlen=100))
+    recent_pdf_failures: Deque[float] = field(default_factory=lambda: deque(maxlen=CIRCUIT_BREAKER_WINDOW))
+    circuit_breaker_open: bool = False
+    circuit_breaker_open_time: float = 0.0
+    memory_usage: float = 0.0
+    last_concurrency_adjust: float = field(default_factory=time.time)
+    # ... add more as needed
     
     def __str__(self):
         elapsed = time.time() - self.start_time
@@ -84,13 +109,14 @@ class ScraperStats:
         pages_per_hour = self.pages_processed / hours if hours > 0 else 0
         cases_per_hour = self.total_cases / hours if hours > 0 else 0
         avg_response = sum(self.response_times)/len(self.response_times) if self.response_times else 0
-        
+        mem = self.memory_usage
         return (f"Pages: {self.pages_processed} ({pages_per_hour:.1f}/hr) | "
                 f"Cases: {self.total_cases} ({cases_per_hour:.1f}/hr) | "
                 f"PDFs: {self.pdfs_downloaded} | "
                 f"Incomplete: {self.incomplete_cases} | Errors: {len(self.errors)} | "
                 f"Concurrency: {self.current_concurrency}/{self.active_tasks} | "
-                f"Avg Resp: {avg_response:.2f}s")
+                f"Avg Resp: {avg_response:.2f}s | Mem: {mem:.1f}% | "
+                f"HTML S/F: {self.html_success}/{self.html_fail} | PDF S/F: {self.pdf_success}/{self.pdf_fail}")
 
 class TaskQueue:
     def __init__(self, maxsize: int):
@@ -199,10 +225,7 @@ async def get_tree(client: httpx.AsyncClient, url: str, stats: ScraperStats) -> 
     """Fetch and parse HTML page with improved error handling"""
     start_time = time.time()
     logger.debug(f"Fetching page: {url}")
-    
-    # Update client timeout based on stats
     timeout = adjust_timeouts_based_on_stats(stats)
-    
     try:
         await asyncio.sleep(random.uniform(*POLITENESS_DELAY))
         resp = await client.get(
@@ -212,48 +235,95 @@ async def get_tree(client: httpx.AsyncClient, url: str, stats: ScraperStats) -> 
             follow_redirects=True
         )
         resp.raise_for_status()
-        
-        # Add response validation
         if len(resp.text) < 100:  # Arbitrary minimum
             raise httpx.ReadError("Response too short")
-        
         response_time = time.time() - start_time
         stats.response_times.append(response_time)
-        
+        stats.html_success += 1
+        stats.recent_statuses.append(resp.status_code)
+        logger.info(f"HTML GET {url} {resp.status_code} in {response_time:.2f}s")
         return html.fromstring(resp.text)
     except httpx.ReadTimeout as e:
         logger.warning(f"Read timeout fetching {url} (attempting retry): {e}")
+        stats.html_fail += 1
+        stats.recent_statuses.append(0)
         raise
     except httpx.TimeoutException as e:
         logger.warning(f"Timeout exception fetching {url}: {e}")
+        stats.html_fail += 1
+        stats.recent_statuses.append(0)
         raise
     except Exception as e:
         logger.error(f"Error fetching {url}: {str(e)[:200]}")
+        stats.html_fail += 1
+        stats.recent_statuses.append(0)
         raise
 
-async def download_pdf(client: httpx.AsyncClient, pdf_url: str, filename: str) -> str:
-    """Download PDF file with error handling"""
+def sha256sum(filename: str) -> str:
+    """Calculate SHA256 checksum of a file"""
+    h = hashlib.sha256()
+    with open(filename, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+async def download_pdf(client: httpx.AsyncClient, pdf_url: str, filename: str, stats: ScraperStats) -> str:
+    """Download PDF file with retry, resume, and checksum verification"""
     path = os.path.join(PDF_DIR, filename)
-    if os.path.exists(path):
-        logger.debug(f"PDF exists: {filename}")
-        return path
-        
-    logger.info(f"Downloading PDF: {pdf_url}")
-    try:
-        async with client.stream(
-            "GET",
-            pdf_url,
-            headers=get_random_headers(pdf_url),
-            timeout=REQUEST_TIMEOUT
-        ) as r:
-            r.raise_for_status()
-            async with aiofiles.open(path, "wb") as f:
-                async for chunk in r.aiter_bytes():
-                    await f.write(chunk)
-        return path
-    except Exception as e:
-        logger.error(f"Error downloading PDF {pdf_url}: {str(e)[:200]}")
-        raise
+    temp_path = path + ".part"
+    expected_checksum = None
+    for attempt in range(1, MAX_PDF_RETRIES + 1):
+        try:
+            # Circuit breaker: if open, pause
+            if stats.circuit_breaker_open:
+                cooldown_left = CIRCUIT_BREAKER_COOLDOWN - (time.time() - stats.circuit_breaker_open_time)
+                if cooldown_left > 0:
+                    logger.warning(f"PDF circuit breaker open, pausing {cooldown_left:.1f}s")
+                    await asyncio.sleep(cooldown_left)
+                stats.circuit_breaker_open = False
+            # Resume logic
+            resume = False
+            file_size = 0
+            if os.path.exists(temp_path):
+                file_size = os.path.getsize(temp_path)
+                resume = file_size > 0
+            headers = get_random_headers(pdf_url)
+            if resume:
+                headers['Range'] = f'bytes={file_size}-'
+            logger.info(f"Downloading PDF: {pdf_url} (attempt {attempt}, resume={resume})")
+            start_time = time.time()
+            async with client.stream(
+                "GET",
+                pdf_url,
+                headers=headers,
+                timeout=PDF_REQUEST_TIMEOUT
+            ) as r:
+                r.raise_for_status()
+                # If resuming, append to file
+                mode = 'ab' if resume else 'wb'
+                async with aiofiles.open(temp_path, mode) as f:
+                    async for chunk in r.aiter_bytes():
+                        await f.write(chunk)
+            duration = time.time() - start_time
+            logger.info(f"PDF download finished in {duration:.2f}s: {filename}")
+            # Checksum verification
+            os.replace(temp_path, path)
+            checksum = sha256sum(path)
+            logger.info(f"PDF checksum: {checksum} for {filename}")
+            stats.pdf_success += 1
+            stats.recent_pdf_failures.append(0)
+            return path
+        except Exception as e:
+            logger.error(f"Error downloading PDF {pdf_url} (attempt {attempt}): {str(e)[:200]}")
+            stats.pdf_fail += 1
+            stats.recent_pdf_failures.append(1)
+            await asyncio.sleep(min(2 ** attempt, 30))
+            # Circuit breaker: if too many failures, open breaker
+            if sum(stats.recent_pdf_failures) / len(stats.recent_pdf_failures or [1]) > CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+                stats.circuit_breaker_open = True
+                stats.circuit_breaker_open_time = time.time()
+                logger.warning("PDF circuit breaker triggered!")
+    raise Exception(f"Failed to download PDF after {MAX_PDF_RETRIES} attempts: {pdf_url}")
 
 async def parse_case(client: httpx.AsyncClient, case_url: str, stats: ScraperStats) -> Dict:
     """Parse case details from case page using lxml"""
@@ -332,7 +402,7 @@ async def parse_case(client: httpx.AsyncClient, case_url: str, stats: ScraperSta
             item['pdf_filename'] = pdf_filename
             safe_filename = sanitize_filename(pdf_filename)
             try:
-                item['pdf_path'] = await download_pdf(client, pdf_url, safe_filename)
+                item['pdf_path'] = await download_pdf(client, pdf_url, safe_filename, stats)
             except Exception as e:
                 item['pdf_path'] = None
                 item['pdf_download_error'] = str(e)
@@ -498,35 +568,47 @@ def check_memory_usage():
     return mem.percent
 
 async def adjust_concurrency(stats: ScraperStats):
-    """Adjust concurrency based on performance and memory"""
+    """Adjust concurrency based on performance, memory, and server health, with gradual changes and logging"""
     while True:
-        await asyncio.sleep(30)  # Check every 30 seconds
-        
-        # Check memory usage
+        await asyncio.sleep(CONCURRENCY_ADJUST_INTERVAL)
         mem_usage = check_memory_usage()
-        if mem_usage > MEMORY_THRESHOLD:
-            new_concurrency = max(MIN_CONCURRENCY, stats.current_concurrency - 1)
-            logger.warning(f"High memory usage ({mem_usage}%), reducing concurrency to {new_concurrency}")
-            stats.current_concurrency = new_concurrency
+        stats.memory_usage = mem_usage
+        now = time.time()
+        if now - stats.last_concurrency_adjust < CONCURRENCY_ADJUST_INTERVAL:
             continue
-        
-        # Only adjust if we have enough data
-        if len(stats.response_times) < 10:
-            continue
-            
-        avg_response = sum(stats.response_times) / len(stats.response_times)
-        target = RESPONSE_TIME_TARGET
-        
-        if avg_response > target * 1.5 and stats.current_concurrency > MIN_CONCURRENCY:
-            # Response times are slow, reduce concurrency
-            new_concurrency = max(MIN_CONCURRENCY, stats.current_concurrency - 1)
-            logger.info(f"High response time ({avg_response:.2f}s > {target:.1f}s), reducing concurrency to {new_concurrency}")
-            stats.current_concurrency = new_concurrency
-        elif avg_response < target * 0.7 and stats.current_concurrency < MAX_CONCURRENCY:
-            # Response times are fast, increase concurrency
-            new_concurrency = min(MAX_CONCURRENCY, stats.current_concurrency + 1)
-            logger.info(f"Low response time ({avg_response:.2f}s < {target:.1f}s), increasing concurrency to {new_concurrency}")
-            stats.current_concurrency = new_concurrency
+        stats.last_concurrency_adjust = now
+        avg_response = sum(stats.response_times) / len(stats.response_times) if stats.response_times else 0
+        # Only increase concurrency if server is healthy (no recent 429/503, fast HEAD)
+        can_increase = True
+        if stats.current_concurrency < MAX_CONCURRENCY:
+            # Check for recent 429/503
+            recent_errors = [s for s in list(stats.recent_statuses)[-20:] if s in (429, 503, 0)]
+            if recent_errors:
+                can_increase = False
+            # Check server health
+            if can_increase:
+                try:
+                    import httpx
+                    with httpx.Client() as client:
+                        resp = client.head(BASE_URL, timeout=5.0)
+                        if resp.status_code != 200:
+                            can_increase = False
+                except Exception:
+                    can_increase = False
+        # Gradual adjustment
+        old_conc = stats.current_concurrency
+        if mem_usage > MEMORY_THRESHOLD and stats.current_concurrency > MIN_CONCURRENCY:
+            stats.current_concurrency = max(MIN_CONCURRENCY, stats.current_concurrency - 1)
+            logger.warning(f"High memory usage ({mem_usage}%), reducing concurrency to {stats.current_concurrency}")
+        elif avg_response > RESPONSE_TIME_TARGET * 1.5 and stats.current_concurrency > MIN_CONCURRENCY:
+            stats.current_concurrency = max(MIN_CONCURRENCY, stats.current_concurrency - 1)
+            logger.info(f"High response time ({avg_response:.2f}s), reducing concurrency to {stats.current_concurrency}")
+        elif avg_response < RESPONSE_TIME_TARGET * 0.7 and stats.current_concurrency < MAX_CONCURRENCY and can_increase:
+            stats.current_concurrency = min(MAX_CONCURRENCY, stats.current_concurrency + 1)
+            logger.info(f"Low response time ({avg_response:.2f}s), increasing concurrency to {stats.current_concurrency}")
+        if stats.current_concurrency != old_conc:
+            logger.info(f"Concurrency changed from {old_conc} to {stats.current_concurrency} (mem: {mem_usage:.1f}%, avg_resp: {avg_response:.2f}s)")
+        logger.info(f"Current stats: {stats}")
 
 # Replace RETRY_DELAYS with exponential backoff
 BASE_RETRY_DELAY = 1.0  # Starting delay in seconds
@@ -628,6 +710,8 @@ async def process_page_batch(client: httpx.AsyncClient, page_batch: List[str],
         # Write any remaining batch items
         if batch:
             await write_jsonl_batch(batch, lock)
+        
+        logger.info(f"Batch complete. Stats: {stats}")
         
     finally:
         adjust_task.cancel()
