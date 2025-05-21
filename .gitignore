@@ -30,3 +30,6 @@ docs/*
 !docs/implementation_plan.md
 
 todo.md
+
+tests/*
+!tests/small_scale_async_scraper.py

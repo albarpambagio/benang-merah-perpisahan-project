@@ -7,10 +7,13 @@ requires-python = ">=3.11"
 dependencies = [
     "requests",
     "beautifulsoup4",
-    # "httpx",      # Uncomment if you want async/concurrent fetching
-    # "aiohttp",    # Uncomment if you want async/concurrent fetching
     "httpx>=0.28.1",
     "aiofiles>=24.1.0",
     "tqdm>=4.67.1",
-    "aiocfscrape>=1.0.0",
+    "pytest>=8.3.5",
+    "pytest-httpx>=0.35.0",
+    "lxml>=5.4.0",
+    "pytest-asyncio>=0.26.0",
+    "dask[completed]>=2025.5.0",
+    "psutil>=7.0.0",
 ]
