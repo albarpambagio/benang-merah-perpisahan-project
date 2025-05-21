@@ -4,34 +4,50 @@ from lxml import html
 import aiofiles
 import os
 import json
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Deque
 import random
 import traceback
 import logging
 from tqdm import tqdm
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from collections import deque
 import gc
 import psutil
+from datetime import datetime
 
 # Configuration Constants
 BASE_URL = "https://putusan3.mahkamahagung.go.id/direktori/index/kategori/perceraian.html"
-OUTPUT_JSON = "test_output.jsonl"  # Changed for testing
-PDF_DIR = "test_pdfs"  # Changed for testing
-MAX_PAGES = 2  # Reduced from 499 to 2 for testing
-INITIAL_CONCURRENT_WORKERS = 2  # Reduced from 12 to 2
-PAGE_BATCH_SIZE = 2  # Reduced from 25 to 2
-REQUEST_TIMEOUT = 60.0
-POLITENESS_DELAY = (1.5, 3.0)
-BATCH_SIZE = 5  # Reduced from 20 to 5
-CHECKPOINT_FILE = 'test_checkpoint.txt'  # Changed for testing
-MAX_RETRIES = 3
-RETRY_DELAYS = [3, 7, 15]
-MAX_CONCURRENT_PDF_DOWNLOADS = 2  # Reduced from 5 to 2
-MAX_PENDING_TASKS = 10  # Reduced from 50 to 10
-MEMORY_THRESHOLD = 80
+OUTPUT_JSON = "test_output.jsonl"
+PDF_DIR = "test_pdfs"
+MAX_PAGES = 2  # Test with small number first
+INITIAL_CONCURRENT_WORKERS = 5  # More balanced starting point
+PAGE_BATCH_SIZE = 2
+# Update timeout configuration at the top of the file
+CONNECT_TIMEOUT = 10.0  # Time to establish connection
+READ_TIMEOUT = 45.0    # Time to wait for server response
+WRITE_TIMEOUT = 20.0   # Time to send request
+POOL_TIMEOUT = 10.0    # Time to wait for connection from pool
+
+# Replace simple REQUEST_TIMEOUT with detailed configuration
+REQUEST_TIMEOUT = httpx.Timeout(
+    connect=CONNECT_TIMEOUT,
+    read=READ_TIMEOUT,
+    write=WRITE_TIMEOUT,
+    pool=POOL_TIMEOUT
+)
+POLITENESS_DELAY = (1.0, 2.0)  # More aggressive but still polite
+BATCH_SIZE = 10
+CHECKPOINT_FILE = 'test_checkpoint.txt'
+MAX_RETRIES = 5  # Increased from 3
+RETRY_DELAYS = [2, 5, 10, 20, 30]  # More retry stages
+MAX_CONCURRENT_PDF_DOWNLOADS = 3
+MAX_PENDING_TASKS = 15  # Increased from 10
+MEMORY_THRESHOLD = 85  # Slightly higher threshold
+MIN_CONCURRENCY = 2  # Never drop below this
+MAX_CONCURRENCY = 10  # Absolute maximum
+RESPONSE_TIME_TARGET = 4.0  # Target response time in seconds
 
 # Enhanced User Agents
 USER_AGENTS = [
@@ -56,38 +72,42 @@ class ScraperStats:
     pdfs_downloaded: int = 0
     incomplete_cases: int = 0
     pages_processed: int = 0
-    errors: List[Dict] = None
-    start_time: float = None
-    response_times: deque = None
-    current_concurrency: int = None
-    
-    def __post_init__(self):
-        self.errors = []
-        self.start_time = time.time()
-        self.response_times = deque(maxlen=20)
-        self.current_concurrency = INITIAL_CONCURRENT_WORKERS
+    errors: List[Dict] = field(default_factory=list)
+    start_time: float = field(default_factory=time.time)
+    response_times: Deque[float] = field(default_factory=lambda: deque(maxlen=50))
+    current_concurrency: int = INITIAL_CONCURRENT_WORKERS
+    active_tasks: int = 0
     
     def __str__(self):
         elapsed = time.time() - self.start_time
-        pages_per_hour = (self.pages_processed / max(elapsed, 1)) * 3600
+        hours = elapsed / 3600
+        pages_per_hour = self.pages_processed / hours if hours > 0 else 0
+        cases_per_hour = self.total_cases / hours if hours > 0 else 0
         avg_response = sum(self.response_times)/len(self.response_times) if self.response_times else 0
+        
         return (f"Pages: {self.pages_processed} ({pages_per_hour:.1f}/hr) | "
-                f"Cases: {self.total_cases} | PDFs: {self.pdfs_downloaded} | "
+                f"Cases: {self.total_cases} ({cases_per_hour:.1f}/hr) | "
+                f"PDFs: {self.pdfs_downloaded} | "
                 f"Incomplete: {self.incomplete_cases} | Errors: {len(self.errors)} | "
-                f"Concurrency: {self.current_concurrency} | Avg Resp: {avg_response:.2f}s")
+                f"Concurrency: {self.current_concurrency}/{self.active_tasks} | "
+                f"Avg Resp: {avg_response:.2f}s")
 
 class TaskQueue:
     def __init__(self, maxsize: int):
         self.maxsize = maxsize
         self.queue = asyncio.Queue(maxsize=maxsize)
+        self.active_tasks = 0
     
     async def put(self, task):
         await self.queue.put(task)
     
     async def get(self):
-        return await self.queue.get()
+        task = await self.queue.get()
+        self.active_tasks += 1
+        return task
     
     def task_done(self):
+        self.active_tasks -= 1
         self.queue.task_done()
     
     async def join(self):
@@ -108,6 +128,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger()
 
 def parse_date(date_str: str) -> Optional[str]:
     """Parse Indonesian date string into YYYY-MM-DD format"""
@@ -175,34 +196,49 @@ def extract_page_number(url: str) -> int:
     return int(match.group(1)) if match else 1
 
 async def get_tree(client: httpx.AsyncClient, url: str, stats: ScraperStats) -> html.HtmlElement:
-    """Fetch and parse HTML page with error handling using lxml"""
+    """Fetch and parse HTML page with improved error handling"""
     start_time = time.time()
-    logging.info(f"Fetching page: {url}")
+    logger.debug(f"Fetching page: {url}")
+    
+    # Update client timeout based on stats
+    timeout = adjust_timeouts_based_on_stats(stats)
+    
     try:
         await asyncio.sleep(random.uniform(*POLITENESS_DELAY))
         resp = await client.get(
             url,
             headers=get_random_headers(url),
-            timeout=REQUEST_TIMEOUT
+            timeout=timeout,  # Use dynamic timeout
+            follow_redirects=True
         )
         resp.raise_for_status()
+        
+        # Add response validation
+        if len(resp.text) < 100:  # Arbitrary minimum
+            raise httpx.ReadError("Response too short")
         
         response_time = time.time() - start_time
         stats.response_times.append(response_time)
         
         return html.fromstring(resp.text)
+    except httpx.ReadTimeout as e:
+        logger.warning(f"Read timeout fetching {url} (attempting retry): {e}")
+        raise
+    except httpx.TimeoutException as e:
+        logger.warning(f"Timeout exception fetching {url}: {e}")
+        raise
     except Exception as e:
-        logging.error(f"Error fetching {url}: {str(e)[:200]}")
+        logger.error(f"Error fetching {url}: {str(e)[:200]}")
         raise
 
 async def download_pdf(client: httpx.AsyncClient, pdf_url: str, filename: str) -> str:
     """Download PDF file with error handling"""
     path = os.path.join(PDF_DIR, filename)
     if os.path.exists(path):
-        logging.info(f"PDF exists: {filename}")
+        logger.debug(f"PDF exists: {filename}")
         return path
         
-    logging.info(f"Downloading PDF: {pdf_url}")
+    logger.info(f"Downloading PDF: {pdf_url}")
     try:
         async with client.stream(
             "GET",
@@ -216,15 +252,15 @@ async def download_pdf(client: httpx.AsyncClient, pdf_url: str, filename: str) -
                     await f.write(chunk)
         return path
     except Exception as e:
-        logging.error(f"Error downloading PDF {pdf_url}: {str(e)[:200]}")
+        logger.error(f"Error downloading PDF {pdf_url}: {str(e)[:200]}")
         raise
 
 async def parse_case(client: httpx.AsyncClient, case_url: str, stats: ScraperStats) -> Dict:
     """Parse case details from case page using lxml"""
-    item = {'url': case_url, 'is_complete': False}
+    item = {'url': case_url, 'is_complete': False, 'timestamp': datetime.utcnow().isoformat()}
     
     try:
-        logging.info(f"Parsing case: {case_url}")
+        logger.debug(f"Parsing case: {case_url}")
         tree = await get_tree(client, case_url, stats)
         
         # Extract table data using XPath
@@ -314,7 +350,7 @@ async def parse_case(client: httpx.AsyncClient, case_url: str, stats: ScraperSta
     except Exception as e:
         item['parse_error'] = str(e)
         item['traceback'] = traceback.format_exc()
-        logging.error(f"Error parsing case {case_url}: {e}")
+        logger.error(f"Error parsing case {case_url}: {e}")
     
     return item
 
@@ -323,24 +359,25 @@ async def write_jsonl_batch(items: List[Dict], lock: asyncio.Lock):
     if not items:
         return
     
-    # Create a copy of the batch to avoid holding the lock during IO
-    batch_copy = items.copy()
-    
     async with lock:
         try:
             async with aiofiles.open(OUTPUT_JSON, 'a', encoding='utf-8') as f:
-                for item in batch_copy:
+                for item in items:
                     await f.write(json.dumps(item, ensure_ascii=False) + '\n')
         except Exception as e:
-            logging.error(f"Error writing batch: {e}")
+            logger.error(f"Error writing batch: {e}")
 
 async def worker(case_url: str, client: httpx.AsyncClient, lock: asyncio.Lock, 
                 stats: ScraperStats, batch: List[Dict], batch_lock: asyncio.Lock,
                 pdf_semaphore: asyncio.Semaphore, existing_case_numbers: Set[str]):
     """Worker function to process a single case with retries"""
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(1, MAX_RETRIES + 1):  # Start from 1
         try:
-            await asyncio.sleep(attempt * 2)  # Progressive delay
+            # Use exponential backoff for retries
+            if attempt > 1:
+                delay = calculate_retry_delay(attempt)
+                logger.info(f"Retry {attempt} for {case_url} in {delay:.1f}s")
+                await asyncio.sleep(delay)
             
             # First check if PDF exists to avoid full parse
             tree = await get_tree(client, case_url, stats)
@@ -350,7 +387,7 @@ async def worker(case_url: str, client: httpx.AsyncClient, lock: asyncio.Lock,
                 safe_filename = sanitize_filename(pdf_filename)
                 pdf_path = os.path.join(PDF_DIR, safe_filename)
                 if os.path.exists(pdf_path):
-                    logging.info(f"Skipping case with existing PDF: {case_url}")
+                    logger.debug(f"Skipping case with existing PDF: {case_url}")
                     async with batch_lock:
                         stats.total_cases += 1
                         stats.pdfs_downloaded += 1
@@ -368,7 +405,7 @@ async def worker(case_url: str, client: httpx.AsyncClient, lock: asyncio.Lock,
                         break
             
             if case_number and case_number in existing_case_numbers:
-                logging.info(f"Skipping duplicate case: {case_number}")
+                logger.debug(f"Skipping duplicate case: {case_number}")
                 async with batch_lock:
                     stats.total_cases += 1
                 return
@@ -393,17 +430,16 @@ async def worker(case_url: str, client: httpx.AsyncClient, lock: asyncio.Lock,
             
         except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
             code = getattr(e.response, 'status_code', None) if hasattr(e, 'response') else None
-            if code == 503 or isinstance(e, httpx.TimeoutException):
-                wait = RETRY_DELAYS[attempt] + random.uniform(1, 3)
-                logging.warning(f"Attempt {attempt+1} failed, waiting {wait:.1f}s")
-                await asyncio.sleep(wait)
+            if code in (429, 503) or isinstance(e, httpx.TimeoutException):
+                logger.warning(f"Attempt {attempt+1} failed for {case_url}, waiting to retry...")
                 continue
             async with batch_lock:
                 stats.errors.append({
                     'url': case_url,
                     'error': str(e),
                     'type': type(e).__name__,
-                    'attempt': attempt
+                    'attempt': attempt,
+                    'timestamp': datetime.utcnow().isoformat()
                 })
             break
         except Exception as e:
@@ -413,7 +449,8 @@ async def worker(case_url: str, client: httpx.AsyncClient, lock: asyncio.Lock,
                     'error': str(e),
                     'type': type(e).__name__,
                     'trace': traceback.format_exc(),
-                    'attempt': attempt
+                    'attempt': attempt,
+                    'timestamp': datetime.utcnow().isoformat()
                 })
             break
 
@@ -430,9 +467,9 @@ async def load_existing_case_numbers() -> Set[str]:
                             existing.add(obj['case_number'])
                     except json.JSONDecodeError:
                         continue
-            logging.info(f"Loaded {len(existing)} existing case numbers")
+            logger.info(f"Loaded {len(existing)} existing case numbers")
         except Exception as e:
-            logging.error(f"Error reading {OUTPUT_JSON}: {e}")
+            logger.error(f"Error reading {OUTPUT_JSON}: {e}")
     return existing
 
 async def get_start_page() -> int:
@@ -441,10 +478,10 @@ async def get_start_page() -> int:
         try:
             with open(CHECKPOINT_FILE, 'r') as f:
                 last_page = int(f.read().strip())
-                logging.info(f"Resuming from page {last_page + 1}")
+                logger.info(f"Resuming from page {last_page + 1}")
                 return last_page + 1
         except Exception as e:
-            logging.error(f"Error reading checkpoint: {e}")
+            logger.error(f"Error reading checkpoint: {e}")
     return 1
 
 async def update_checkpoint(page_number: int):
@@ -453,44 +490,85 @@ async def update_checkpoint(page_number: int):
         with open(CHECKPOINT_FILE, 'w') as f:
             f.write(str(page_number))
     except Exception as e:
-        logging.error(f"Error writing checkpoint: {e}")
+        logger.error(f"Error writing checkpoint: {e}")
 
 def check_memory_usage():
-    """Check current memory usage and adjust concurrency if needed"""
+    """Check current memory usage"""
     mem = psutil.virtual_memory()
     return mem.percent
 
 async def adjust_concurrency(stats: ScraperStats):
     """Adjust concurrency based on performance and memory"""
     while True:
-        await asyncio.sleep(60)  # Check every minute
+        await asyncio.sleep(30)  # Check every 30 seconds
         
         # Check memory usage
         mem_usage = check_memory_usage()
         if mem_usage > MEMORY_THRESHOLD:
-            new_concurrency = max(1, stats.current_concurrency - 2)
-            logging.warning(f"High memory usage ({mem_usage}%), reducing concurrency to {new_concurrency}")
+            new_concurrency = max(MIN_CONCURRENCY, stats.current_concurrency - 1)
+            logger.warning(f"High memory usage ({mem_usage}%), reducing concurrency to {new_concurrency}")
             stats.current_concurrency = new_concurrency
             continue
         
-        # Adjust based on response times if we have enough data
-        if len(stats.response_times) >= 10:
-            avg_response = sum(stats.response_times) / len(stats.response_times)
+        # Only adjust if we have enough data
+        if len(stats.response_times) < 10:
+            continue
             
-            if avg_response > 5.0 and stats.current_concurrency > 1:
-                # Response times are slow, reduce concurrency
-                new_concurrency = max(1, stats.current_concurrency - 1)
-                logging.info(f"High response time ({avg_response:.2f}s), reducing concurrency to {new_concurrency}")
-                stats.current_concurrency = new_concurrency
-            elif avg_response < 2.0 and stats.current_concurrency < INITIAL_CONCURRENT_WORKERS * 2:
-                # Response times are fast, increase concurrency
-                new_concurrency = min(INITIAL_CONCURRENT_WORKERS * 2, stats.current_concurrency + 1)
-                logging.info(f"Low response time ({avg_response:.2f}s), increasing concurrency to {new_concurrency}")
-                stats.current_concurrency = new_concurrency
+        avg_response = sum(stats.response_times) / len(stats.response_times)
+        target = RESPONSE_TIME_TARGET
+        
+        if avg_response > target * 1.5 and stats.current_concurrency > MIN_CONCURRENCY:
+            # Response times are slow, reduce concurrency
+            new_concurrency = max(MIN_CONCURRENCY, stats.current_concurrency - 1)
+            logger.info(f"High response time ({avg_response:.2f}s > {target:.1f}s), reducing concurrency to {new_concurrency}")
+            stats.current_concurrency = new_concurrency
+        elif avg_response < target * 0.7 and stats.current_concurrency < MAX_CONCURRENCY:
+            # Response times are fast, increase concurrency
+            new_concurrency = min(MAX_CONCURRENCY, stats.current_concurrency + 1)
+            logger.info(f"Low response time ({avg_response:.2f}s < {target:.1f}s), increasing concurrency to {new_concurrency}")
+            stats.current_concurrency = new_concurrency
+
+# Replace RETRY_DELAYS with exponential backoff
+BASE_RETRY_DELAY = 1.0  # Starting delay in seconds
+MAX_RETRY_DELAY = 30.0  # Maximum delay between retries
+
+def calculate_retry_delay(attempt: int) -> float:
+    """Calculate exponential backoff with jitter"""
+    delay = min(BASE_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+    return delay * (0.5 + random.random())  # Add jitter
+
+async def check_server_health(client: httpx.AsyncClient) -> bool:
+    """Check if server is responsive"""
+    try:
+        resp = await client.head(BASE_URL, timeout=10.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+def adjust_timeouts_based_on_stats(stats: ScraperStats) -> httpx.Timeout:
+    """Adjust timeouts based on recent performance"""
+    if len(stats.response_times) < 5:
+        return REQUEST_TIMEOUT
+    
+    avg_response = sum(stats.response_times) / len(stats.response_times)
+    if avg_response > READ_TIMEOUT * 0.8:
+        return httpx.Timeout(
+            connect=CONNECT_TIMEOUT * 1.5,
+            read=READ_TIMEOUT * 1.5,
+            write=WRITE_TIMEOUT * 1.5,
+            pool=POOL_TIMEOUT * 1.5
+        )
+    return REQUEST_TIMEOUT
 
 async def process_page_batch(client: httpx.AsyncClient, page_batch: List[str], 
                            stats: ScraperStats, existing_case_numbers: Set[str]):
     """Process a batch of pages with enhanced error handling"""
+    # Check server health before processing
+    if not await check_server_health(client):
+        logger.warning("Server unhealthy, pausing for 30s")
+        await asyncio.sleep(30)
+        return await process_page_batch(client, page_batch, stats, existing_case_numbers)
+    
     lock = asyncio.Lock()
     batch_lock = asyncio.Lock()
     pdf_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PDF_DOWNLOADS)
@@ -515,42 +593,36 @@ async def process_page_batch(client: httpx.AsyncClient, page_batch: List[str],
                         continue
                     filtered_case_urls.append(url)
                 
-                logging.info(f"Found {len(filtered_case_urls)} new cases on page {page_url}")
+                logger.info(f"Found {len(filtered_case_urls)} new cases on page {page_url}")
                 
-                # Create tasks with controlled concurrency
-                # Create a task processor
-                async def process_tasks():
-                    while True:
-                        task = await task_queue.get()
-                        try:
-                            await task
-                        except Exception as e:
-                            logging.error(f"Task failed: {e}")
-                        finally:
-                            task_queue.task_done()
-                
-                # Start the processor before queuing tasks
-                processor = asyncio.create_task(process_tasks())
-                
-                # Then queue the tasks
+                # Create worker tasks with controlled concurrency
+                tasks = []
                 for url in filtered_case_urls:
-                    task = asyncio.create_task(worker(url, client, lock, stats, batch, batch_lock, pdf_semaphore, existing_case_numbers))
-                    await task_queue.put(task)
+                    task = worker(
+                        url, client, lock, stats, batch, batch_lock,
+                        pdf_semaphore, existing_case_numbers
+                    )
+                    tasks.append(task)
                 
-                # Wait for all tasks to complete
-                await task_queue.join()
-                processor.cancel()
+                # Process tasks with semaphore to limit concurrency
+                semaphore = asyncio.Semaphore(stats.current_concurrency)
+                
+                async def run_task(task):
+                    async with semaphore:
+                        return await task
+                
+                await asyncio.gather(*[run_task(task) for task in tasks])
                 
                 stats.pages_processed += 1
-                logging.info(f"Progress: {stats}")
+                logger.info(f"Progress: {stats}")
                 
             except Exception as e:
-                logging.error(f"Failed to process page {page_url}: {e}")
+                logger.error(f"Failed to process page {page_url}: {e}")
                 retry_queue.append(page_url)
         
         # Retry failed pages
         if retry_queue:
-            logging.info(f"Retrying {len(retry_queue)} failed pages...")
+            logger.info(f"Retrying {len(retry_queue)} failed pages...")
             await process_page_batch(client, list(retry_queue), stats, existing_case_numbers)
         
         # Write any remaining batch items
@@ -569,21 +641,21 @@ async def process_page_batch(client: httpx.AsyncClient, page_batch: List[str],
 
 async def main():
     """Main scraping function"""
-    logging.info("Starting optimized scraper for 499 pages")
+    logger.info("Starting optimized scraper")
     stats = ScraperStats()
 
-    # Configure HTTP client
-    transport = httpx.AsyncHTTPTransport()
-    limits = httpx.Limits(
-        max_connections=INITIAL_CONCURRENT_WORKERS * 2,
-        max_keepalive_connections=INITIAL_CONCURRENT_WORKERS
+    # Configure HTTP client with retry
+    transport = httpx.AsyncHTTPTransport(
+        retries=2,
+        limits=httpx.Limits(
+            max_connections=MAX_CONCURRENCY * 2,
+            max_keepalive_connections=MAX_CONCURRENCY,
+            keepalive_expiry=60.0
+        ),
+        http2=True
     )
-
-    async with httpx.AsyncClient(
-        timeout=REQUEST_TIMEOUT,
-        limits=limits,
-        transport=transport
-    ) as client:
+    
+    async with httpx.AsyncClient(transport=transport) as client:
         # Load existing case numbers once
         existing_case_numbers = await load_existing_case_numbers()
         
@@ -608,17 +680,17 @@ async def main():
             current_page += PAGE_BATCH_SIZE
 
     # Final stats
-    logging.info(f"Scraping complete. Final stats: {stats}")
+    logger.info(f"Scraping complete. Final stats: {stats}")
     if stats.errors:
-        logging.error(f"Encountered {len(stats.errors)} errors")
+        logger.error(f"Encountered {len(stats.errors)} errors")
         for error in stats.errors[:5]:  # Show first 5 errors
-            logging.error(f"Error on {error['url']}: {error['error']}")
+            logger.error(f"Error on {error['url']}: {error['error']}")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Scraper stopped by user")
+        logger.info("Scraper stopped by user")
     except Exception as e:
-        logging.error(f"Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
         traceback.print_exc()
