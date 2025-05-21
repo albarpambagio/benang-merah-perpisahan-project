@@ -191,10 +191,10 @@ def sanitize_filename(filename: str) -> str:
     return safe
 
 def extract_pdf_info(tree) -> tuple:
-    """Extract PDF URL and filename from case page using lxml"""
-    for card in tree.xpath('//div[contains(@class, "card") and contains(@class, "bg-success")]'):
+    """Extract PDF URL and filename from case page using lxml (optimized XPath)"""
+    for card in tree.xpath('//div[contains(concat(" ", normalize-space(@class), " "), " card ") and contains(concat(" ", normalize-space(@class), " "), " bg-success ")]'):
         for span in card.xpath('.//span'):
-            icon = span.xpath('.//i[contains(@class, "icon-files")]')
+            icon = span.xpath('.//i[contains(concat(" ", normalize-space(@class), " "), " icon-files ")]')
             if icon and 'Download PDF' in span.text_content().strip():
                 for a in card.xpath('.//a'):
                     link_text = a.text_content().strip()
@@ -203,15 +203,15 @@ def extract_pdf_info(tree) -> tuple:
     return None, None
 
 def extract_case_links(tree) -> List[str]:
-    """Extract case detail page links from listing page using lxml"""
+    """Extract case detail page links from listing page using lxml (optimized XPath)"""
     return list(dict.fromkeys(
-        link.get('href') 
+        link.get('href')
         for link in tree.xpath('//div[@class="spost clearfix"]//strong/a[@href]')
     ))
 
 def find_next_page(tree) -> Optional[str]:
-    """Find URL for next page in pagination using lxml"""
-    for a in tree.xpath('//div[contains(@class, "pagging")]//a[contains(@class, "page-link")]'):
+    """Find URL for next page in pagination using lxml (optimized XPath)"""
+    for a in tree.xpath('//div[contains(concat(" ", normalize-space(@class), " "), " pagging ")]//a[contains(concat(" ", normalize-space(@class), " "), " page-link ")]'):
         if a.text_content().strip() == 'Next':
             return a.get('href')
     return None
@@ -771,10 +771,15 @@ async def main():
             logger.error(f"Error on {error['url']}: {error['error']}")
 
 if __name__ == "__main__":
-    try:
+    import sys
+    # --- PROFILING BLOCK START ---
+    if '--profile' in sys.argv:
+        import cProfile
+        import pstats
+        with cProfile.Profile() as pr:
+            asyncio.run(main())
+        stats = pstats.Stats(pr)
+        stats.sort_stats('cumtime').print_stats(20)
+    else:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Scraper stopped by user")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        traceback.print_exc()
+    # --- PROFILING BLOCK END ---
