@@ -16,7 +16,16 @@ ENV/
 # Output and logs
 output_async.jsonl
 pdfs_async/
+pdfs/
+scrapy.log
 *.log
+
+# Scrapy cache and output
+.scrapy/
+scrapy/court_cases/.scrapy/
+scrapy/court_cases/httpcache/
+scrapy/court_cases/pdfs/
+scrapy/crawls/
 
 # OS files
 .DS_Store
@@ -26,10 +35,15 @@ Thumbs.db
 .vscode/
 .idea/ 
 
+# Docs (except implementation plan)
 docs/*
 !docs/implementation_plan.md
 
+# To-do and notes
 todo.md
 
+# Tests (except small scale async scraper)
 tests/*
 !tests/small_scale_async_scraper.py
+
+.pytest_cache/
