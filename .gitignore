@@ -6,31 +6,49 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.eggs/
 
-# VSCode
-.vscode/
+# Virtual environments
+.venv/
+venv/
+ENV/
 
-# Scraper output and logs
-data/*.ndjson
-data/*.txt
-data/pdfs/
-.cache/
-scraper.log
+# Output and logs
+output_async.jsonl
+pdfs_async/
+pdfs/
+scrapy.log
+*.log
+
+# Scrapy cache and output
+.scrapy/
+scrapy/court_cases/.scrapy/
+scrapy/court_cases/httpcache/
+scrapy/court_cases/pdfs/
+scrapy/crawls/
+scrapy/court_cases_output.jsonl
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Virtual environments
-.venv
+# IDEs
+.vscode/
+.idea/ 
+
+# Docs (except implementation plan)
 docs/*
 !docs/implementation_plan.md
 
-# Scraper output and logs
-scraper/*.pdf
-scraper/*.zip
-scraper/*.csv
-scraper/*.log
-scraper/__pycache__/
-scraper/downloads/
-scraper/estimate_result.txt
+# To-do and notes
+todo.md
+
+# Tests (except small scale async scraper)
+tests/*
+!tests/small_scale_async_scraper.py
+
+.pytest_cache/
+
+extraction/*
+!*.py
+
