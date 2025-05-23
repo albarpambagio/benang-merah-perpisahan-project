@@ -26,6 +26,7 @@ scrapy/court_cases/.scrapy/
 scrapy/court_cases/httpcache/
 scrapy/court_cases/pdfs/
 scrapy/crawls/
+scrapy/court_cases_output.jsonl
 
 # OS files
 .DS_Store
