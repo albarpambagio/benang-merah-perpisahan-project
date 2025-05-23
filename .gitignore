@@ -48,3 +48,7 @@ tests/*
 !tests/small_scale_async_scraper.py
 
 .pytest_cache/
+
+extraction/*
+!extraction/extract_pdf.py
+!extraction/structure_output.py

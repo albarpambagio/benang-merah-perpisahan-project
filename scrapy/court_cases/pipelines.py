@@ -31,6 +31,19 @@ class ValidationPipeline:
 class DuplicatesPipeline:
     def __init__(self):
         self.seen = set()
+        # Load existing nomor from output file for persistent deduplication
+        output_path = os.path.join(os.path.dirname(__file__), '..', 'court_cases_output.jsonl')
+        output_path = os.path.abspath(output_path)
+        if os.path.exists(output_path):
+            with open(output_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                        nomor = data.get('nomor')
+                        if nomor:
+                            self.seen.add(nomor)
+                    except Exception:
+                        continue
 
     def process_item(self, item, spider):
         nomor = item.get('nomor')

@@ -5,15 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "requests",
-    "beautifulsoup4",
-    "httpx>=0.28.1",
-    "aiofiles>=24.1.0",
-    "tqdm>=4.67.1",
-    "pytest>=8.3.5",
-    "pytest-httpx>=0.35.0",
     "lxml>=5.4.0",
-    "pytest-asyncio>=0.26.0",
-    "psutil>=7.0.0",
+    "pymupdf>=1.26.0",
     "scrapy>=2.13.0",
 ]
