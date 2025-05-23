@@ -7,5 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "lxml>=5.4.0",
     "pymupdf>=1.26.0",
+    "rapidfuzz>=3.13.0",
     "scrapy>=2.13.0",
 ]

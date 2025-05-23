@@ -50,5 +50,5 @@ tests/*
 .pytest_cache/
 
 extraction/*
-!extraction/extract_pdf.py
-!extraction/structure_output.py
+!*.py
+
