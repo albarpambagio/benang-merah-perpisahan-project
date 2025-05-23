@@ -12,6 +12,7 @@ MAIN_HEADERS = [
     "PERTIMBANGAN HUKUM",
     "Mengadili",
     "Penutup",
+    "Perincian biaya",
 ]
 SUBHEADERS_UNDER = {
     "PERTIMBANGAN HUKUM": [
@@ -30,7 +31,8 @@ ALL_HEADERS = MAIN_HEADERS + ALL_SUBHEADERS
 BOILERPLATE_PATTERNS = [
     r"Kepaniteraan Mahkamah Agung Republik Indonesia[\s\S]*?fungsi peradilan\." ,
     r"Dalam hal Anda menemukan inakurasi informasi[\s\S]*?harap segera hubungi Kepaniteraan Mahkamah Agung RI melalui :",
-    r"Halaman \d+ dari \d+ hal\."  # page numbers
+    r"Halaman \\d+ dari \\d+ hal\." , # page numbers
+    r"^Untuk Salinantera Pengadilan Agama Ban.*$", # remove this footer line
 ]
 
 EXPECTED_SECTION_HEADERS = {"Preamble", "PEMOHON", "TERMOHON"}
@@ -78,8 +80,17 @@ def group_sections_fuzzy(text):
     for line in lines:
         if not line.strip():
             continue
+        # Special handling for 'Perincian biaya' even if it appears mid-line or with a colon
+        if re.match(r"^Perincian biaya\s*[:\-]?", line.strip(), re.IGNORECASE):
+            if current_section:
+                if current_subsection:
+                    current_section["subsections"].append(current_subsection)
+                    current_subsection = None
+                sections.append(current_section)
+            current_section = {"header": "Perincian biaya", "content": line.strip(), "subsections": []}
+            continue
         main_header = is_header(line, MAIN_HEADERS)
-        if main_header:
+        if main_header and main_header != "Perincian biaya":
             if current_section:
                 if current_subsection:
                     current_section["subsections"].append(current_subsection)
@@ -176,13 +187,20 @@ if __name__ == "__main__":
 
     with open(args.input_file, "r", encoding="utf-8") as f:
         text = f.read()
+
+    # Remove boilerplate first!
+    text = remove_boilerplate(text)
+    print("[DEBUG] After boilerplate removal:\n", text[:1000], "\n---\n")
+
     preamble, rest = extract_preamble(text)
+    print("[DEBUG] After preamble extraction:\n", preamble[:500], "\n---\n", rest[:500], "\n---\n")
     sections = []
     if preamble:
         sections.append({"header": "Preamble", "content": preamble})
     parties, text_wo_parties = extract_party_blocks(rest)
-    sections += parties + group_sections_fuzzy(remove_boilerplate(text_wo_parties))
-    validate_coverage(remove_boilerplate(text), sections)
+    print("[DEBUG] After party extraction:\n", str(parties), "\n---\n", text_wo_parties[:500], "\n---\n")
+    sections += parties + group_sections_fuzzy(text_wo_parties)
+    validate_coverage(text, sections)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(sections, f, indent=2, ensure_ascii=False)
     md_path = os.path.splitext(args.output)[0] + ".md"
