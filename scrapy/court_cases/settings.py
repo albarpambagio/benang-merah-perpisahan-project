@@ -19,7 +19,7 @@ ADDONS = {}
 #USER_AGENT = "court_cases (+http://www.yourdomain.com)"
 
 # Obey robots.txt rules
-ROBOTSTXT_OBEY = True
+ROBOTSTXT_OBEY = False
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
 CONCURRENT_REQUESTS = 5
@@ -54,7 +54,7 @@ CONCURRENT_REQUESTS_PER_IP = 8
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 DOWNLOADER_MIDDLEWARES = {
     'court_cases.middlewares.UserAgentRotationMiddleware': 400,
-    'court_cases.middlewares.CircuitBreakerMiddleware': 410,
+    # 'court_cases.middlewares.CircuitBreakerMiddleware': 410,
     'court_cases.middlewares.PDFDelayMiddleware': 420,
 }
 
@@ -74,7 +74,7 @@ PDF_DIR = 'pdfs'
 ITEM_PIPELINES = {
     'court_cases.pipelines.ValidationPipeline': 100,
     'court_cases.pipelines.DuplicatesPipeline': 200,
-    'court_cases.spiders.court_cases_spider.CustomFilesPipeline': 400,
+    'court_cases.pipelines.CustomFilesPipeline': 400,
     # 'court_cases.pipelines.JsonWriterPipeline': 300,  # Commented out for FilesPipeline
 }
 
@@ -93,7 +93,7 @@ AUTOTHROTTLE_DEBUG = True
 
 # Enable and configure HTTP caching (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
-HTTPCACHE_ENABLED = True
+HTTPCACHE_ENABLED = False
 HTTPCACHE_EXPIRATION_SECS = 86400
 HTTPCACHE_DIR = 'httpcache'
 HTTPCACHE_IGNORE_HTTP_CODES = [500, 502, 503, 504]

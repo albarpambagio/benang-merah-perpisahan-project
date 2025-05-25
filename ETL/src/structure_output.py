@@ -2,6 +2,7 @@ import re
 import json
 import argparse
 import os
+from utils.text_structure import remove_boilerplate, extract_preamble, group_sections_fuzzy
 from rapidfuzz import fuzz, process
 
 # Define main headers and subheaders for hierarchy
@@ -12,6 +13,7 @@ MAIN_HEADERS = [
     "PERTIMBANGAN HUKUM",
     "Mengadili",
     "Penutup",
+    "Perincian biaya",
 ]
 SUBHEADERS_UNDER = {
     "PERTIMBANGAN HUKUM": [
@@ -30,80 +32,15 @@ ALL_HEADERS = MAIN_HEADERS + ALL_SUBHEADERS
 BOILERPLATE_PATTERNS = [
     r"Kepaniteraan Mahkamah Agung Republik Indonesia[\s\S]*?fungsi peradilan\." ,
     r"Dalam hal Anda menemukan inakurasi informasi[\s\S]*?harap segera hubungi Kepaniteraan Mahkamah Agung RI melalui :",
-    r"Halaman \d+ dari \d+ hal\."  # page numbers
+    r"Halaman \\d+ dari \\d+ hal\." , # page numbers
+    r"^Untuk Salinantera Pengadilan Agama Ban.*$", # remove this footer line
 ]
 
 EXPECTED_SECTION_HEADERS = {"Preamble", "PEMOHON", "TERMOHON"}
 
-def remove_boilerplate(text):
-    for pat in BOILERPLATE_PATTERNS:
-        text = re.sub(pat, "", text, flags=re.DOTALL)
-    return text
-
-def extract_preamble(text):
-    # Extract lines before the first main header
-    lines = text.splitlines()
-    preamble_lines = []
-    for i, line in enumerate(lines):
-        if is_header(line, MAIN_HEADERS):
-            return "\n".join(preamble_lines).strip(), "\n".join(lines[i:]).strip()
-        preamble_lines.append(line)
-    return "\n".join(preamble_lines).strip(), ""
-
-def extract_party_blocks(text):
-    # More robust: match blocks starting with PEMOHON or TERMOHON (with optional comma/colon), up to the next party header or double newline
-    party_pattern = re.compile(r"(^PEMOHON[,:]?)([\s\S]*?)(?=^TERMOHON[,:]?|\n\n|\Z)", re.MULTILINE)
-    termohon_pattern = re.compile(r"(^TERMOHON[,:]?)([\s\S]*?)(?=^PEMOHON[,:]?|\n\n|\Z)", re.MULTILINE)
-    parties = []
-    text_wo_parties = text
-    pemohon_match = party_pattern.search(text)
-    termohon_match = termohon_pattern.search(text)
-    if pemohon_match:
-        parties.append({"header": "PEMOHON", "content": (pemohon_match.group(1) + pemohon_match.group(2)).strip()})
-        text_wo_parties = text_wo_parties.replace(pemohon_match.group(0), "")
-    if termohon_match:
-        parties.append({"header": "TERMOHON", "content": (termohon_match.group(1) + termohon_match.group(2)).strip()})
-        text_wo_parties = text_wo_parties.replace(termohon_match.group(0), "")
-    return parties, text_wo_parties
-
 def is_header(line, header_list, threshold=85):
     match, score, _ = process.extractOne(line.strip(), header_list, scorer=fuzz.ratio)
     return match if score >= threshold else None
-
-def group_sections_fuzzy(text):
-    lines = text.splitlines()
-    sections = []
-    current_section = None
-    current_subsection = None
-    for line in lines:
-        if not line.strip():
-            continue
-        main_header = is_header(line, MAIN_HEADERS)
-        if main_header:
-            if current_section:
-                if current_subsection:
-                    current_section["subsections"].append(current_subsection)
-                    current_subsection = None
-                sections.append(current_section)
-            current_section = {"header": main_header, "content": "", "subsections": []}
-            continue
-        subheader = is_header(line, ALL_SUBHEADERS)
-        if subheader and current_section and current_section["header"] == "PERTIMBANGAN HUKUM":
-            if current_subsection:
-                current_section["subsections"].append(current_subsection)
-            current_subsection = {"header": subheader, "content": ""}
-            continue
-        # Add line to the right place
-        if current_subsection:
-            current_subsection["content"] += line + "\n"
-        elif current_section:
-            current_section["content"] += line + "\n"
-    # Add last section/subsection
-    if current_subsection and current_section:
-        current_section["subsections"].append(current_subsection)
-    if current_section:
-        sections.append(current_section)
-    return sections
 
 def normalize_line(line):
     # Replace curly apostrophes with straight, collapse whitespace, and strip
@@ -176,13 +113,19 @@ if __name__ == "__main__":
 
     with open(args.input_file, "r", encoding="utf-8") as f:
         text = f.read()
+
+    # Remove boilerplate first!
+    text = remove_boilerplate(text)
+    print("[DEBUG] After boilerplate removal:\n", text[:1000], "\n---\n")
+
     preamble, rest = extract_preamble(text)
+    print("[DEBUG] After preamble extraction:\n", preamble[:500], "\n---\n", rest[:500], "\n---\n")
     sections = []
     if preamble:
         sections.append({"header": "Preamble", "content": preamble})
-    parties, text_wo_parties = extract_party_blocks(rest)
-    sections += parties + group_sections_fuzzy(remove_boilerplate(text_wo_parties))
-    validate_coverage(remove_boilerplate(text), sections)
+    # No party extraction, just group sections from rest
+    sections += group_sections_fuzzy(rest)
+    validate_coverage(text, sections)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(sections, f, indent=2, ensure_ascii=False)
     md_path = os.path.splitext(args.output)[0] + ".md"

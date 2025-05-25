@@ -49,6 +49,8 @@ tests/*
 
 .pytest_cache/
 
-extraction/*
+ETL/*
 !*.py
+!ETL/src/
 
+data/
