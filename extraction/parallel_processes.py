@@ -128,7 +128,7 @@ class PDFProcessor:
             logger.debug(f"Validation failed for {pdf_path}: {str(e)}")
             return False
 
-    def process_single_pdf(self, pdf_path: str, output_dir: str, keep_intermediate: bool = False) -> bool:
+    def process_single_pdf(self, pdf_path: str, output_dir: str, keep_intermediate: bool = False, txt_output: bool = False) -> bool:
         import subprocess
         process_verdict_path = os.path.join(os.path.dirname(__file__), 'src', 'process_verdict.py')
         cmd = [
@@ -139,6 +139,8 @@ class PDFProcessor:
         ]
         if keep_intermediate:
             cmd.append('--keep-intermediate')
+        if txt_output:
+            cmd.append('--txt-output')
         try:
             result = subprocess.run(
                 cmd, 
@@ -158,7 +160,7 @@ class PDFProcessor:
             logger.error(f"Unexpected error processing {pdf_path}: {str(e)}")
             return False
 
-    def worker(self, queue: Queue, output_dir: str, keep_intermediate: bool, pbar: tqdm):
+    def worker(self, queue: Queue, output_dir: str, keep_intermediate: bool, pbar: tqdm, txt_output: bool = False):
         while True:
             try:
                 pdf_path = queue.get_nowait()
@@ -168,14 +170,14 @@ class PDFProcessor:
             for attempt in range(self.max_retries):
                 if attempt > 0:
                     logger.info(f"Retry {attempt} for {pdf_path}")
-                success = self.process_single_pdf(pdf_path, output_dir, keep_intermediate)
+                success = self.process_single_pdf(pdf_path, output_dir, keep_intermediate, txt_output)
                 if success:
                     break
             self.update_state(pdf_path, success)
             pbar.update(1)
             queue.task_done()
 
-    def run_parallel_processing(self, pdf_list: List[str], output_dir: str, jobs: int = 4, keep_intermediate: bool = False, resume: bool = True, dry_run: bool = False) -> None:
+    def run_parallel_processing(self, pdf_list: List[str], output_dir: str, jobs: int = 4, keep_intermediate: bool = False, resume: bool = True, dry_run: bool = False, txt_output: bool = False) -> None:
         if not pdf_list:
             logger.warning("No PDFs to process")
             return
@@ -190,7 +192,7 @@ class PDFProcessor:
             queue.put(pdf)
         with tqdm(total=len(pdf_list)) as pbar:
             with ThreadPoolExecutor(max_workers=jobs) as executor:
-                futures = [executor.submit(self.worker, queue, output_dir, keep_intermediate, pbar) for _ in range(jobs)]
+                futures = [executor.submit(self.worker, queue, output_dir, keep_intermediate, pbar, txt_output) for _ in range(jobs)]
                 queue.join()
         logger.info("Parallel processing completed")
 
@@ -253,6 +255,11 @@ def main():
         action='store_true',
         help='Enable debug logging'
     )
+    parser.add_argument(
+        '--txt-output',
+        action='store_true',
+        help='Only output cleaned, preprocessed text as .txt (no markdown or JSON)'
+    )
     args = parser.parse_args()
 
     if args.debug:
@@ -314,7 +321,8 @@ def main():
         args.jobs,
         args.keep_intermediate,
         args.resume,
-        args.dry_run
+        args.dry_run,
+        args.txt_output
     )
 
     # Save state and generate summary

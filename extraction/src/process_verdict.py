@@ -90,6 +90,11 @@ def main() -> None:
         action='store_true',
         help='Enable debug logging'
     )
+    parser.add_argument(
+        '--txt-output',
+        action='store_true',
+        help='Only output cleaned, preprocessed text as .txt (no markdown or JSON)'
+    )
     args = parser.parse_args()
 
     if args.debug:
@@ -113,6 +118,10 @@ def main() -> None:
         '-o', paths['cleaned_txt']
     ]) or not validate_file_exists(paths['cleaned_txt']):
         sys.exit(1)
+
+    if getattr(args, 'txt_output', False):
+        logger.info(f"--txt-output set, exiting after cleaned text: {paths['cleaned_txt']}")
+        sys.exit(0)
 
     # Step 2: Structure the cleaned text
     logger.info("Step 2/3: Structuring text into sections")
