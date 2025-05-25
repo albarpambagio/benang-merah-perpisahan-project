@@ -51,4 +51,5 @@ tests/*
 
 extraction/*
 !*.py
+!extraction/src/
 

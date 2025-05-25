@@ -9,6 +9,8 @@ from itemadapter import ItemAdapter
 import json
 import os
 from scrapy.exceptions import DropItem
+from scrapy.pipelines.files import FilesPipeline
+import time
 
 
 class CourtCasesPipeline:
@@ -64,3 +66,42 @@ class JsonWriterPipeline:
         line = json.dumps(dict(item), ensure_ascii=False) + '\n'
         self.file.write(line)
         return item
+
+class CustomFilesPipeline(FilesPipeline):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.logger is automatically set up by Scrapy's base class
+
+    def file_path(self, request, response=None, info=None, *, item=None):
+        # Use the sanitized filename from the item if available
+        if item and 'file_name' in item:
+            return item['file_name']
+        return super().file_path(request, response, info, item=item)
+
+    def media_downloaded(self, response, request, info, *, item=None):
+        # If the download failed, log and set error
+        if response.status != 200:
+            if item is not None:
+                item['pdf_download_error'] = f"HTTP {response.status}"
+            self.logger.warning(f"PDF download failed: {request.url} (status {response.status})")
+        return super().media_downloaded(response, request, info, item=item)
+
+    def media_failed(self, failure, request, info, *, item=None):
+        # Log and set error on item
+        if item is not None:
+            item['pdf_download_error'] = str(failure.value)
+        self.logger.warning(f"PDF download failed: {request.url} ({failure.value})")
+        # Exponential backoff retry logic (up to 3 times)
+        retries = request.meta.get('pdf_retry', 0)
+        if retries < 3:
+            delay = 2 ** retries  # 1s, 2s, 4s
+            self.logger.info(f"Retrying PDF download for {request.url} in {delay} seconds (attempt {retries+1})")
+            time.sleep(delay)
+            new_request = request.replace(dont_filter=True)
+            new_request.meta['pdf_retry'] = retries + 1
+            return self._enqueue_request(new_request, info)
+        return super().media_failed(failure, request, info, item=item)
+
+    def _enqueue_request(self, request, info):
+        # Helper to re-enqueue a request for retry
+        info.download_func(request, info)

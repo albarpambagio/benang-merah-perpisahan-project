@@ -43,30 +43,16 @@ def remove_boilerplate(text):
     return text
 
 def extract_preamble(text):
-    # Extract lines before the first main header
+    # Extract lines before the first main header (now DUDUK PERKARA)
     lines = text.splitlines()
     preamble_lines = []
+    duduk_perkara_found = False
     for i, line in enumerate(lines):
-        if is_header(line, MAIN_HEADERS):
+        if is_header(line, ["DUDUK PERKARA"]):
+            duduk_perkara_found = True
             return "\n".join(preamble_lines).strip(), "\n".join(lines[i:]).strip()
         preamble_lines.append(line)
     return "\n".join(preamble_lines).strip(), ""
-
-def extract_party_blocks(text):
-    # More robust: match blocks starting with PEMOHON or TERMOHON (with optional comma/colon), up to the next party header or double newline
-    party_pattern = re.compile(r"(^PEMOHON[,:]?)([\s\S]*?)(?=^TERMOHON[,:]?|\n\n|\Z)", re.MULTILINE)
-    termohon_pattern = re.compile(r"(^TERMOHON[,:]?)([\s\S]*?)(?=^PEMOHON[,:]?|\n\n|\Z)", re.MULTILINE)
-    parties = []
-    text_wo_parties = text
-    pemohon_match = party_pattern.search(text)
-    termohon_match = termohon_pattern.search(text)
-    if pemohon_match:
-        parties.append({"header": "PEMOHON", "content": (pemohon_match.group(1) + pemohon_match.group(2)).strip()})
-        text_wo_parties = text_wo_parties.replace(pemohon_match.group(0), "")
-    if termohon_match:
-        parties.append({"header": "TERMOHON", "content": (termohon_match.group(1) + termohon_match.group(2)).strip()})
-        text_wo_parties = text_wo_parties.replace(termohon_match.group(0), "")
-    return parties, text_wo_parties
 
 def is_header(line, header_list, threshold=85):
     match, score, _ = process.extractOne(line.strip(), header_list, scorer=fuzz.ratio)
@@ -197,9 +183,8 @@ if __name__ == "__main__":
     sections = []
     if preamble:
         sections.append({"header": "Preamble", "content": preamble})
-    parties, text_wo_parties = extract_party_blocks(rest)
-    print("[DEBUG] After party extraction:\n", str(parties), "\n---\n", text_wo_parties[:500], "\n---\n")
-    sections += parties + group_sections_fuzzy(text_wo_parties)
+    # No party extraction, just group sections from rest
+    sections += group_sections_fuzzy(rest)
     validate_coverage(text, sections)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(sections, f, indent=2, ensure_ascii=False)
