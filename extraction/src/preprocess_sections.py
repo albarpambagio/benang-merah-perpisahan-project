@@ -1,9 +1,10 @@
-import re
 import argparse
 import os
+from utils.text_cleaning import remove_boilerplate, remove_artifacts, clean_whitespace
+from typing import List
 
 # Patterns for boilerplate and repetitive notices
-BOILERPLATE_PATTERNS = [
+BOILERPLATE_PATTERNS: List[str] = [
     r"Namun dalam hal-hal tertentu masih dimungkinkan terjadi permasalahan teknis terkait dengan akurasi dan keterkinian informasi yang kami sajikan, hal mana akan terus kami perbaiki dari waktu kewaktu\.?",
     r"Halaman \\d+ dari \\d+ hal\.?",
     r"^Untuk Salinantera Pengadilan Agama Ban.*$",
@@ -18,29 +19,15 @@ MAIN_HEADERS = [
     "Perincian biaya",
 ]
 
+import re
 HEADER_PATTERN = re.compile(r"^(%s)[\s:：-]*$" % "|".join([re.escape(h) for h in MAIN_HEADERS]), re.IGNORECASE)
 
-# Remove boilerplate and repetitive notices
-def remove_boilerplate(text):
-    for pat in BOILERPLATE_PATTERNS:
-        text = re.sub(pat, "", text, flags=re.MULTILINE)
-    return text
-
-# Standardize section headers (uppercase, on their own line)
 def standardize_headers(text):
     def repl(match):
         return f"\n{match.group(1).upper()}\n"
     # Place headers on their own line, uppercase
     return HEADER_PATTERN.sub(repl, text)
 
-# Remove page numbers, line numbers, and artifacts
-def remove_artifacts(text):
-    # Remove lines that are just numbers or page markers
-    text = re.sub(r"^\s*\d+\s*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^Page \d+.*$", "", text, flags=re.MULTILINE)
-    return text
-
-# Fix broken lines (join lines that are not headers and not empty)
 def fix_broken_lines(text):
     lines = text.splitlines()
     fixed_lines = []
@@ -67,20 +54,10 @@ def fix_broken_lines(text):
         fixed_lines.append(buffer)
     return "\n".join(fixed_lines)
 
-# Remove extra whitespace and blank lines
-def clean_whitespace(text):
-    # Remove leading/trailing spaces
-    text = "\n".join(line.strip() for line in text.splitlines())
-    # Collapse multiple blank lines to one
-    text = re.sub(r"\n{2,}", "\n\n", text)
-    return text.strip()
-
-# Ensure UTF-8 encoding (handled by file read/write)
-
 def preprocess_file(input_path, output_path):
     with open(input_path, "r", encoding="utf-8") as f:
         text = f.read()
-    text = remove_boilerplate(text)
+    text = remove_boilerplate(text, BOILERPLATE_PATTERNS)
     text = remove_artifacts(text)
     text = standardize_headers(text)
     text = fix_broken_lines(text)

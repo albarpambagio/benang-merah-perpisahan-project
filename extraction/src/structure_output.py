@@ -2,6 +2,7 @@ import re
 import json
 import argparse
 import os
+from utils.text_structure import remove_boilerplate, extract_preamble, group_sections_fuzzy
 from rapidfuzz import fuzz, process
 
 # Define main headers and subheaders for hierarchy
@@ -37,70 +38,9 @@ BOILERPLATE_PATTERNS = [
 
 EXPECTED_SECTION_HEADERS = {"Preamble", "PEMOHON", "TERMOHON"}
 
-def remove_boilerplate(text):
-    for pat in BOILERPLATE_PATTERNS:
-        text = re.sub(pat, "", text, flags=re.DOTALL)
-    return text
-
-def extract_preamble(text):
-    # Extract lines before the first main header (now DUDUK PERKARA)
-    lines = text.splitlines()
-    preamble_lines = []
-    duduk_perkara_found = False
-    for i, line in enumerate(lines):
-        if is_header(line, ["DUDUK PERKARA"]):
-            duduk_perkara_found = True
-            return "\n".join(preamble_lines).strip(), "\n".join(lines[i:]).strip()
-        preamble_lines.append(line)
-    return "\n".join(preamble_lines).strip(), ""
-
 def is_header(line, header_list, threshold=85):
     match, score, _ = process.extractOne(line.strip(), header_list, scorer=fuzz.ratio)
     return match if score >= threshold else None
-
-def group_sections_fuzzy(text):
-    lines = text.splitlines()
-    sections = []
-    current_section = None
-    current_subsection = None
-    for line in lines:
-        if not line.strip():
-            continue
-        # Special handling for 'Perincian biaya' even if it appears mid-line or with a colon
-        if re.match(r"^Perincian biaya\s*[:\-]?", line.strip(), re.IGNORECASE):
-            if current_section:
-                if current_subsection:
-                    current_section["subsections"].append(current_subsection)
-                    current_subsection = None
-                sections.append(current_section)
-            current_section = {"header": "Perincian biaya", "content": line.strip(), "subsections": []}
-            continue
-        main_header = is_header(line, MAIN_HEADERS)
-        if main_header and main_header != "Perincian biaya":
-            if current_section:
-                if current_subsection:
-                    current_section["subsections"].append(current_subsection)
-                    current_subsection = None
-                sections.append(current_section)
-            current_section = {"header": main_header, "content": "", "subsections": []}
-            continue
-        subheader = is_header(line, ALL_SUBHEADERS)
-        if subheader and current_section and current_section["header"] == "PERTIMBANGAN HUKUM":
-            if current_subsection:
-                current_section["subsections"].append(current_subsection)
-            current_subsection = {"header": subheader, "content": ""}
-            continue
-        # Add line to the right place
-        if current_subsection:
-            current_subsection["content"] += line + "\n"
-        elif current_section:
-            current_section["content"] += line + "\n"
-    # Add last section/subsection
-    if current_subsection and current_section:
-        current_section["subsections"].append(current_subsection)
-    if current_section:
-        sections.append(current_section)
-    return sections
 
 def normalize_line(line):
     # Replace curly apostrophes with straight, collapse whitespace, and strip

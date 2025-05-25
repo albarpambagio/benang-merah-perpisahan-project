@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
+from utils.pdf_utils import validate_pdf, check_duplicates
+from utils.state_utils import load_state, save_state, update_state
 
 # Configure logging
 logging.basicConfig(
@@ -42,37 +44,13 @@ class PDFProcessor:
         self.min_pdf_size = 1024  # 1KB minimum size to process
 
     def load_state(self) -> None:
-        """Load processing state from previous run"""
-        try:
-            if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
-                    state = json.load(f)
-                    self.processed_files = set(state.get('processed', []))
-                    self.failed_files = set(state.get('failed', []))
-                logger.info(f"Loaded state: {len(self.processed_files)} processed, {len(self.failed_files)} failed")
-        except Exception as e:
-            logger.warning(f"Could not load state file: {str(e)}")
+        load_state(self)
 
     def save_state(self) -> None:
-        """Save current processing state"""
-        try:
-            with open(self.state_file, 'w') as f:
-                json.dump({
-                    'processed': list(self.processed_files),
-                    'failed': list(self.failed_files),
-                    'timestamp': datetime.now().isoformat()
-                }, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save state: {str(e)}")
+        save_state(self)
 
     def update_state(self, file_path: str, success: bool) -> None:
-        if success:
-            self.processed_files.add(file_path)
-            if file_path in self.failed_files:
-                self.failed_files.remove(file_path)
-        else:
-            self.failed_files.add(file_path)
-        self.save_state()
+        update_state(self, file_path, success)
 
     def find_pdfs(self, input_path: str) -> List[Tuple[str, int]]:
         pdfs = []
@@ -89,48 +67,14 @@ class PDFProcessor:
         return sorted(pdfs, key=lambda x: x[1], reverse=True)
 
     def check_duplicates(self, pdfs: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
-        size_map = defaultdict(list)
-        unique_pdfs = []
-        duplicates_found = 0
-        for path, size in pdfs:
-            filename = os.path.basename(path)
-            size_map[(filename, size)].append(path)
-        for (filename, size), paths in size_map.items():
-            if len(paths) > 1:
-                duplicates_found += len(paths) - 1
-                with open(self.duplicates_file, 'a') as f:
-                    f.write(f"Duplicate: {filename} ({size} bytes)\n")
-                    for p in paths:
-                        f.write(f"  - {p}\n")
-                unique_pdfs.append((paths[0], size))
-            else:
-                unique_pdfs.append((paths[0], size))
-        if duplicates_found:
-            logger.warning(f"Found {duplicates_found} duplicate PDFs. See {self.duplicates_file}")
-        return unique_pdfs
+        return check_duplicates(pdfs, self.duplicates_file)
 
     def validate_pdf(self, pdf_path: str) -> bool:
-        try:
-            if not os.path.exists(pdf_path):
-                logger.debug(f"File not found: {pdf_path}")
-                return False
-            size = os.path.getsize(pdf_path)
-            if size < self.min_pdf_size:
-                logger.debug(f"File too small ({size} bytes): {pdf_path}")
-                return False
-            with open(pdf_path, 'rb') as f:
-                header = f.read(4)
-                if header != b'%PDF':
-                    logger.debug(f"Invalid PDF header in: {pdf_path}")
-                    return False
-            return True
-        except Exception as e:
-            logger.debug(f"Validation failed for {pdf_path}: {str(e)}")
-            return False
+        return validate_pdf(pdf_path, self.min_pdf_size)
 
     def process_single_pdf(self, pdf_path: str, output_dir: str, keep_intermediate: bool = False, txt_output: bool = False) -> bool:
         import subprocess
-        process_verdict_path = os.path.join(os.path.dirname(__file__), 'src', 'process_verdict.py')
+        process_verdict_path = os.path.join(os.path.dirname(__file__), 'process_verdict.py')
         cmd = [
             sys.executable,
             process_verdict_path,
@@ -324,6 +268,31 @@ def main():
         args.dry_run,
         args.txt_output
     )
+
+    # If --txt-output, run batch post-processing on all cleaned text files
+    if args.txt_output:
+        import subprocess
+        # Run post-processing, output directly to output_dir
+        cmd = [
+            sys.executable,
+            os.path.join(os.path.dirname(__file__), "preprocess_cleaned_txt.py"),
+            "--input-dir", args.output_dir,
+            "--output-dir", args.output_dir
+        ]
+        print(f"Running batch text post-processing: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            logger.error("Batch text post-processing failed.")
+        else:
+            logger.info(f"Batch text post-processing complete. Preprocessed .txt files are in {args.output_dir}")
+            # Delete all _cleaned.txt files from output_dir
+            for fname in os.listdir(args.output_dir):
+                if fname.endswith('_cleaned.txt'):
+                    try:
+                        os.remove(os.path.join(args.output_dir, fname))
+                        logger.info(f"Removed intermediate file: {fname}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove {fname}: {str(e)}")
 
     # Save state and generate summary
     processor.save_state()
