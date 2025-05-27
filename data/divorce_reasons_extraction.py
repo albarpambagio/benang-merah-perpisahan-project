@@ -1,157 +1,440 @@
-# %%
+# -*- coding: utf-8 -*-
 """
-Clustering Divorce Reasons from Indonesian Court Decisions
+Enhanced Divorce Reason Clustering from Indonesian Court Decisions
 
-This notebook-style script demonstrates two approaches for clustering 'alasan perceraian' (divorce reasons):
-- Option A: UMAP + HDBSCAN
-- Option B: BERTopic
-
-It follows the implementation plan for unsupervised grouping of similar divorce reasons, using Indonesian legal texts.
+Key Improvements:
+1. Robust reason section extraction with multiple fallback patterns
+2. Advanced sentence filtering using inclusion/exclusion patterns
+3. Refined stopword lists for legal Indonesian
+4. Optimized clustering parameters
+5. Post-clustering validation
+6. Comprehensive visualization and analysis
 """
-# %%
-# Install dependencies (uncomment if running in a new environment)
-# !pip install pandas scikit-learn sentence-transformers umap-learn hdbscan bertopic Sastrawi tqdm
 
-# %%
+# %% Initial Setup
 import json
+import re
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import re
-
-# ---
-# 1. Load a sample of court decision texts
-# ---
-# For demo, we use a small sample. Adjust 'max_docs' as needed.
-sample_path = 'court_cases_output_with_text.jsonl'
-reasons = []
-max_docs = 100  # adjust for demo
-reason_keywords = [
-    'karena', 'sebab', 'alasan', 'tidak cocok', 'kekerasan', 'nafkah', 'perselingkuhan',
-    'selingkuh', 'ditinggalkan', 'ekonomi', 'kdrt', 'mabuk', 'judi', 'penganiayaan', 'kdrt',
-    'tidak pulang', 'tidak memberi', 'tidak menafkahi', 'tidak bertanggung jawab', 'tidak harmonis'
-]
-legal_boilerplate = [
-    'pasal', 'huruf', 'undang-undang', 'kompilasi', 'putusan', 'pengadilan', 'hukum', 'perdata',
-    'putusan', 'putusan pengadilan', 'putusan hakim', 'putusan nomor', 'putusan perkara', 'putusan banding',
-    'putusan kasasi', 'putusan mahkamah', 'putusan pengadilan agama', 'putusan pengadilan negeri',
-    'putusan pengadilan tinggi', 'putusan pengadilan tata usaha negara', 'putusan pengadilan militer',
-    'putusan pengadilan niaga', 'putusan pengadilan hubungan industrial', 'putusan pengadilan tipikor',
-    'putusan pengadilan tindak pidana korupsi', 'putusan pengadilan anak', 'putusan pengadilan agama islam',
-    'putusan pengadilan agama kristen', 'putusan pengadilan agama katolik', 'putusan pengadilan agama hindu',
-    'putusan pengadilan agama budha', 'putusan pengadilan agama konghucu', 'putusan pengadilan agama lainnya'
-]
-with open(sample_path, encoding='utf-8') as f:
-    for i, line in enumerate(f):
-        if i >= max_docs:
-            break
-        obj = json.loads(line)
-        text = obj.get('text', '')
-        for sent in re.split(r'[\n\.!?]', text):
-            sent_lower = sent.lower()
-            if any(kw in sent_lower for kw in reason_keywords):
-                if not any(law in sent_lower for law in legal_boilerplate):
-                    if 20 < len(sent) < 400:
-                        reasons.append(sent.strip())
-    # Fallback: if extraction yields too few, use first 1-2 sentences
-    if not reasons and text:
-        sents = re.split(r'[\n\.!?]', text)
-        reasons.extend([s.strip() for s in sents[:2] if len(s.strip()) > 20])
-print(f"Loaded {len(reasons)} extracted divorce reason sentences.")
-
-# For demo, if extraction yields too few, use a hardcoded sample
-if len(reasons) < 10:
-    reasons = [
-        "Tergugat tidak memberikan nafkah lahir dan batin selama dua tahun.",
-        "Penggugat sering mengalami kekerasan fisik dari tergugat.",
-        "Tergugat berselingkuh dengan wanita lain dan tidak pulang ke rumah.",
-        "Sering terjadi pertengkaran karena masalah ekonomi.",
-        "Tergugat meninggalkan rumah tanpa izin selama berbulan-bulan.",
-        "Tidak ada kecocokan lagi antara penggugat dan tergugat.",
-        "Tergugat melakukan kekerasan verbal dan fisik.",
-        "Penggugat merasa tidak dihargai dan sering diabaikan.",
-        "Tergugat berjudi dan tidak memberikan nafkah.",
-        "Penggugat dan tergugat sering bertengkar karena perbedaan prinsip."
-    ]
-
-# Create DataFrame
-import numpy as np
-df = pd.DataFrame({
-    "id": np.arange(1, len(reasons)+1),
-    "reason_text": reasons
-})
-df = df.drop_duplicates(subset=["reason_text"]).reset_index(drop=True)
-print(df.head())
-
-# %%
-# ---
-# 2. Preprocessing: Use straycat for Indonesian text cleaning and tokenization
-# ---
-from straycat.text_preprocessing import TextPreprocessing
-
-prep = TextPreprocessing()
-# auto_text_prep returns a list of tokens per document
-processed_tokens = prep.auto_text_prep(df['reason_text'].tolist())
-# For embedding, join tokens back to string
-cleaned_strs = [' '.join(tokens) for tokens in processed_tokens]
-df['cleaned'] = cleaned_strs
-
-# Show a sample of the tokenized output
-print("Sample tokenized output:")
-for i, tokens in enumerate(processed_tokens[:5]):
-    print(f"{df['reason_text'][i]}\n-> {tokens}\n")
-
-# %%
-# ---
-# 3. Embedding: Use IndoBERT or multilingual model
-# ---
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import silhouette_score
 from sentence_transformers import SentenceTransformer
-
-try:
-    model = SentenceTransformer("firqaaa/indo-sentence-bert-base")
-except Exception:
-    print("Falling back to multilingual model...")
-    model = SentenceTransformer("distiluse-base-multilingual-cased")
-
-embeddings = model.encode(df['cleaned'].tolist(), show_progress_bar=True)
-print(f"Embeddings shape: {embeddings.shape}")
-
-# %%
-# ---
-# 4A. Option A: UMAP + HDBSCAN
-# ---
 import umap
 import hdbscan
+import altair as alt
+from straycat.text_preprocessing import TextPreprocessing
 
-reducer = umap.UMAP(n_neighbors=10, n_components=5, metric='cosine', random_state=42)
-umap_embeddings = reducer.fit_transform(embeddings)
+# Disable Altair max rows limit
+alt.data_transformers.disable_max_rows()
 
-clusterer = hdbscan.HDBSCAN(min_cluster_size=2, metric='euclidean', cluster_selection_method='eom')
-labels = clusterer.fit_predict(umap_embeddings)
-df['umap_hdbscan_cluster'] = labels
-print(df[['reason_text', 'umap_hdbscan_cluster']].head())
+# %% Constants and Configuration
+class Config:
+    SAMPLE_PATH = 'court_cases_output_with_text.jsonl'
+    MAX_DOCS = 200  # Adjust based on available resources
+    MIN_REASON_LENGTH = 20
+    MAX_REASON_LENGTH = 400
+    OUTPUT_KEYWORDS_FILE = 'auto_reason_keywords.txt'
+    
+    # Model selection
+    EMBEDDING_MODEL_PRIMARY = "firqaaa/indo-sentence-bert-base"
+    EMBEDDING_MODEL_FALLBACK = "distiluse-base-multilingual-cased"
+    
+    # UMAP parameters
+    UMAP_PARAMS = {
+        'n_neighbors': 15,
+        'n_components': 10,
+        'metric': 'cosine',
+        'random_state': 42,
+        'min_dist': 0.1
+    }
+    
+    # HDBSCAN parameters
+    HDBSCAN_PARAMS = {
+        'min_cluster_size': 3,
+        'metric': 'euclidean',
+        'cluster_selection_method': 'eom',
+        'min_samples': 2
+    }
 
-# %%
-# ---
-# 5. Cluster Interpretation: Show top keywords per cluster (UMAP+HDBSCAN)
-# ---
-print("\nExample reasons per UMAP+HDBSCAN cluster:")
-for label in sorted(df['umap_hdbscan_cluster'].unique()):
-    print(f"\nCluster {label}:")
-    print(df[df['umap_hdbscan_cluster'] == label]['reason_text'].head(5).to_string(index=False))
+# %% Legal and Linguistic Resources
+class LanguageResources:
+    # Legal boilerplate terms
+    LEGAL_BOILERPLATE = [
+        'pasal', 'huruf', 'undang-undang', 'kompilasi', 'putusan', 'pengadilan', 
+        'hukum', 'perdata', 'nomor', 'tahun', 'perkara', 'mahkamah', 'agama',
+        'negeri', 'tinggi', 'banding', 'kasasi', 'mengadili', 'memutus',
+        'menetapkan', 'dalil', 'pokok', 'pertimbangan', 'mengingat', 'demi'
+    ]
+    
+    # Indonesian stopwords
+    INDONESIAN_STOPWORDS = [
+        'dan', 'atau', 'yang', 'untuk', 'dengan', 'dari', 'pada', 'oleh', 
+        'dalam', 'adalah', 'ke', 'di', 'sebagai', 'tidak', 'sudah', 'akan', 
+        'karena', 'juga', 'lebih', 'agar', 'bagi', 'dapat', 'tersebut', 
+        'setelah', 'telah', 'bahwa', 'oleh', 'sehingga', 'maka', 'setiap',
+        'diri', 'masih', 'harus', 'bukan', 'saat', 'sampai', 'sejak', 'antara',
+        'namun', 'tetapi', 'hanya', 'saja', 'jika', 'bila', 'pun', 'per'
+    ]
+    
+    # Legal action verbs
+    LEGAL_ACTION_WORDS = [
+        'mengajukan', 'mengabulkan', 'menolak', 'menyatakan', 'memutuskan',
+        'menghukum', 'menetapkan', 'mempertimbangkan', 'menerima', 'menyampaikan',
+        'memeriksa', 'mendengar', 'mempertimbangkan', 'menimbang', 'menguatkan'
+    ]
+    
+    # Combined stopwords
+    @classmethod
+    def get_stopwords(cls):
+        return list(set(cls.LEGAL_BOILERPLATE + cls.INDONESIAN_STOPWORDS + cls.LEGAL_ACTION_WORDS))
+    
+    # Common reason keyphrases (for validation)
+    REASON_PATTERNS = {
+        'financial': ['nafkah', 'ekonomi', 'biaya hidup', 'tidak memberi nafkah', 'penghasilan'],
+        'violence': ['kekerasan', 'memukul', 'menyakiti', 'kekerasan fisik', 'kekerasan verbal'],
+        'infidelity': ['selingkuh', 'perselingkuhan', 'wanita lain', 'pria lain', 'hubungan terlarang'],
+        'abandonment': ['meninggalkan', 'tidak pulang', 'pergi tanpa kabar', 'tinggal rumah', 'pergi begitu saja'],
+        'disharmony': ['tidak cocok', 'sering bertengkar', 'tidak harmonis', 'konflik terus', 'pertikaian']
+    }
 
-# %%
-# ---
-# 6. (Optional) Trend Analysis & Evaluation
-# ---
-# If you have year/region columns, you can do:
-# df.groupby(["year", "bertopic_topic"]).size().unstack().plot()
+# %% Text Extraction Functions
+class TextExtractor:
+    @staticmethod
+    def extract_duduk_perkara(text):
+        """Extract the 'duduk perkara' section with multiple pattern fallbacks"""
+        if not isinstance(text, str) or not text.strip():
+            return ""
+        patterns = [
+            r'duduk[\s\-]perkara(.*?)(?:pertimbangan hukum|menimbang|putusan|demikianlah|mengingat)',
+            r'(alasan[\s\-]pokok|alasan[\s\-]perceraian|sebab[\s\-]perceraian)(.*?)(?:dalam[\s\-]perkara|pertimbangan)',
+            r'(latar[\s\-]belakang|sebab[\s\-]musabab)(.*?)(?:dalam[\s\-]perkara|pertimbangan)',
+            r'(menyatakan bahwa|mengajukan bahwa)(.*?)(?:oleh karena itu|sehubungan dengan)'
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                extracted = match.group(1).strip()
+                # Clean legal references
+                extracted = re.sub(
+                    r'(pasal|ayat|uu|peraturan|nomor|tahun)[\s\d\-]+[^\s]*',
+                    '',
+                    extracted,
+                    flags=re.IGNORECASE
+                )
+                return extracted
+        return ""  # fallback if no pattern matches
+    
+    @staticmethod
+    def is_reason_sentence(sent):
+        """Determine if a sentence contains a divorce reason using multiple criteria"""
+        if not isinstance(sent, str) or not sent.strip():
+            return False
+        if len(sent) < Config.MIN_REASON_LENGTH:
+            return False
+        sent_lower = sent.lower()
+        # Exclusion patterns (legal boilerplate and non-reasons)
+        exclusion_patterns = [
+            r'berdasarkan (pasal|ayat|uu|peraturan)',
+            r'dalil[\s\-]pokok',
+            r'pengadilan (agama|negeri)',
+            r'perkara nomor',
+            r'(memutus|menetapkan|mengadili)',
+            r'(dengan ini|demi keadilan)',
+            r'^[^\w]*(yang|dengan|untuk|pada)'
+        ]
+        # Inclusion patterns (common reason indicators)
+        inclusion_patterns = [
+            r'(karena|sebab|disebabkan|akibat|oleh)',
+            r'(tidak|pernah|jarang|sering|selalu) (memberi|melakukan|pulang|menghargai)',
+            r'(kekerasan|selingkuh|pertengkaran|ekonomi|nafkah)',
+            r'(meninggalkan|pergi|tidak pulang)',
+            r'(tidak (ada|terjadi) (kecocokan|harmoni))',
+            r'(perbuatan (tercela|asusila|melanggar))'
+        ]
+        # First check exclusions
+        if any(re.search(p, sent_lower) for p in exclusion_patterns):
+            return False
+        # Then check for positive indicators
+        return any(re.search(p, sent_lower) for p in inclusion_patterns)
+    
+    @staticmethod
+    def extract_reasons_from_text(text):
+        """Main function to extract potential reason sentences from text"""
+        if not isinstance(text, str) or not text.strip():
+            return []
+        # First try to extract duduk perkara section
+        duduk_perkara = TextExtractor.extract_duduk_perkara(text)
+        section = duduk_perkara if duduk_perkara else text
+        # Split into sentences and filter
+        sentences = []
+        for sent in re.split(r'[\n\.!?]', section):
+            sent = sent.strip()
+            if (sent and 
+                Config.MIN_REASON_LENGTH <= len(sent) <= Config.MAX_REASON_LENGTH and 
+                TextExtractor.is_reason_sentence(sent)):
+                sentences.append(sent)
+        # Fallback: if extraction yields too few, use first meaningful sentences
+        if len(sentences) < 3 and text:
+            sents = re.split(r'[\n\.!?]', text)
+            sentences.extend([
+                s.strip() for s in sents[:5]
+                if (isinstance(s, str) and 
+                    s.strip() and 
+                    Config.MIN_REASON_LENGTH <= len(s.strip()) <= Config.MAX_REASON_LENGTH)
+            ])
+        return sentences
 
-# Internal evaluation (Silhouette Score)
-from sklearn.metrics import silhouette_score
-if len(set(labels)) > 1 and len(df) > len(set(labels)):
-    sil = silhouette_score(umap_embeddings, labels)
-    print(f"Silhouette Score (UMAP+HDBSCAN): {sil:.3f}")
-else:
-    print("Silhouette Score not available (only one cluster or too few samples).")
+# %% Data Loading and Preparation
+def load_and_prepare_data():
+    """Load court decisions and extract potential reason sentences"""
+    reasons = []
+    with open(Config.SAMPLE_PATH, encoding='utf-8') as f:
+        for i, line in tqdm(enumerate(f), desc="Processing documents"):
+            if i >= Config.MAX_DOCS:
+                break
+            try:
+                obj = json.loads(line)
+                text = obj.get('text', '')
+                if not isinstance(text, str):
+                    continue
+                extracted = TextExtractor.extract_reasons_from_text(text)
+                if extracted:
+                    reasons.extend(extracted)
+            except (json.JSONDecodeError, AttributeError) as e:
+                print(f"Error processing line {i}: {str(e)}")
+                continue
+    # Fallback to sample data if extraction yields too few
+    if len(reasons) < 10:
+        reasons = [
+            "Tergugat tidak memberikan nafkah lahir dan batin selama dua tahun.",
+            "Penggugat sering mengalami kekerasan fisik dari tergugat.",
+            "Tergugat berselingkuh dengan wanita lain dan tidak pulang ke rumah.",
+            "Sering terjadi pertengkaran karena masalah ekonomi.",
+            "Tergugat meninggalkan rumah tanpa izin selama berbulan-bulan.",
+            "Tidak ada kecocokan lagi antara penggugat dan tergugat.",
+            "Tergugat melakukan kekerasan verbal dan fisik.",
+            "Penggugat merasa tidak dihargai dan sering diabaikan.",
+            "Tergugat berjudi dan tidak memberikan nafkah.",
+            "Penggugat dan tergugat sering bertengkar karena perbedaan prinsip."
+        ]
+    # Create DataFrame with unique reasons
+    df = pd.DataFrame({
+        "id": np.arange(1, len(reasons)+1),
+        "reason_text": reasons
+    })
+    df = df.drop_duplicates(subset=["reason_text"]).reset_index(drop=True)
+    print(f"\nLoaded {len(df)} unique reason sentences.")
+    return df
 
-# --- End of notebook --- 
+# %% Text Preprocessing
+def preprocess_text(df):
+    """Clean and tokenize text using straycat"""
+    prep = TextPreprocessing()
+    processed_tokens = prep.auto_text_prep(df['reason_text'].tolist())
+    cleaned_strs = [' '.join(tokens) for tokens in processed_tokens]
+    df['cleaned'] = cleaned_strs
+    
+    # Show sample preprocessing
+    print("\nSample preprocessing results:")
+    for i, tokens in enumerate(processed_tokens[:3]):
+        print(f"Original: {df['reason_text'][i]}")
+        print(f"Processed: {tokens}\n")
+    
+    return df
+
+# %% Feature Extraction
+def extract_features(df):
+    """Generate TF-IDF features and embeddings"""
+    # TF-IDF for keyword extraction
+    vectorizer = TfidfVectorizer(
+        max_features=100, 
+        stop_words=LanguageResources.get_stopwords()
+    )
+    tfidf = vectorizer.fit_transform(df['cleaned'].tolist())
+    terms = vectorizer.get_feature_names_out()
+    means = tfidf.mean(axis=0).A1
+    top_idx = means.argsort()[::-1][:20]
+    auto_reason_keywords = [terms[i] for i in top_idx]
+    
+    print("\nTop global TF-IDF keywords:", auto_reason_keywords)
+    
+    # Save keywords
+    with open(Config.OUTPUT_KEYWORDS_FILE, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(auto_reason_keywords))
+    
+    # Generate embeddings
+    try:
+        model = SentenceTransformer(Config.EMBEDDING_MODEL_PRIMARY)
+    except Exception:
+        print("Primary model not available, falling back to multilingual model...")
+        model = SentenceTransformer(Config.EMBEDDING_MODEL_FALLBACK)
+    
+    embeddings = model.encode(
+        df['cleaned'].tolist(), 
+        show_progress_bar=True,
+        convert_to_numpy=True
+    )
+    
+    print(f"\nEmbeddings shape: {embeddings.shape}")
+    return df, embeddings
+
+# %% Clustering
+def perform_clustering(embeddings):
+    """Perform UMAP dimensionality reduction and HDBSCAN clustering"""
+    # UMAP for dimensionality reduction
+    reducer = umap.UMAP(**Config.UMAP_PARAMS)
+    umap_embeddings = reducer.fit_transform(embeddings)
+    
+    # HDBSCAN clustering
+    clusterer = hdbscan.HDBSCAN(**Config.HDBSCAN_PARAMS)
+    labels = clusterer.fit_predict(umap_embeddings)
+    
+    return umap_embeddings, labels
+
+# %% Cluster Validation
+def validate_clusters(df, labels):
+    """Validate clusters based on reason content"""
+    # First calculate cluster validity scores
+    df['cluster'] = labels
+    valid_clusters = set()
+    
+    for cluster_id in df['cluster'].unique():
+        if cluster_id == -1:  # Skip noise
+            continue
+            
+        cluster_samples = df[df['cluster'] == cluster_id]['reason_text'].tolist()
+        if not cluster_samples:
+            continue
+            
+        # Calculate reason score (percentage of valid reason sentences)
+        reason_score = sum(
+            1 for text in cluster_samples 
+            if TextExtractor.is_reason_sentence(text)
+        ) / len(cluster_samples)
+        
+        # Consider cluster valid if >70% are actual reasons
+        if reason_score >= 0.7:
+            valid_clusters.add(cluster_id)
+    
+    # Mark valid clusters
+    df['valid_reason_cluster'] = df['cluster'].apply(
+        lambda x: x if x in valid_clusters else -1
+    )
+    
+    print(f"\nCluster validation: {len(valid_clusters)} valid clusters identified")
+    return df
+
+# %% Cluster Analysis
+def analyze_clusters(df):
+    """Analyze and visualize clustering results"""
+    # Cluster statistics
+    cluster_stats = df[df['valid_reason_cluster'] != -1].groupby('valid_reason_cluster').agg({
+        'id': 'count',
+        'reason_text': lambda x: x.iloc[0][:50] + '...'  # Sample text
+    }).rename(columns={'id': 'count'})
+    
+    print("\nCluster statistics:")
+    print(cluster_stats.sort_values('count', ascending=False))
+    
+    # TF-IDF keywords per cluster
+    print("\nTop keywords per valid cluster:")
+    for cluster_id in df['valid_reason_cluster'].unique():
+        if cluster_id == -1:
+            continue
+            
+        cluster_texts = df[df['valid_reason_cluster'] == cluster_id]['cleaned'].tolist()
+        if not cluster_texts:
+            continue
+            
+        vectorizer = TfidfVectorizer(
+            max_features=30, 
+            stop_words=LanguageResources.get_stopwords()
+        )
+        tfidf = vectorizer.fit_transform(cluster_texts)
+        terms = vectorizer.get_feature_names_out()
+        means = tfidf.mean(axis=0).A1
+        top_idx = means.argsort()[::-1][:5]
+        keywords = [terms[i] for i in top_idx]
+        
+        print(f"Cluster {cluster_id}: {', '.join(keywords)}")
+        print(f"Sample: {df[df['valid_reason_cluster'] == cluster_id]['reason_text'].iloc[0][:80]}...\n")
+
+# %% Visualization
+def visualize_clusters(df, umap_embeddings):
+    """Create interactive visualization of clusters"""
+    # Prepare 2D UMAP for visualization
+    umap_2d = umap.UMAP(
+        n_neighbors=Config.UMAP_PARAMS['n_neighbors'],
+        n_components=2,
+        metric=Config.UMAP_PARAMS['metric'],
+        random_state=42
+    )
+    umap_2d_embeddings = umap_2d.fit_transform(umap_embeddings[:, :Config.UMAP_PARAMS['n_components']])
+    
+    df['umap_x'] = umap_2d_embeddings[:, 0]
+    df['umap_y'] = umap_2d_embeddings[:, 1]
+    
+    # Create Altair chart
+    chart = alt.Chart(df[df['valid_reason_cluster'] != -1]).mark_circle(size=60).encode(
+        x=alt.X('umap_x', title='UMAP-1'),
+        y=alt.Y('umap_y', title='UMAP-2'),
+        color=alt.Color('valid_reason_cluster:N', title='Cluster', 
+                       scale=alt.Scale(scheme='category20')),
+        tooltip=[
+            alt.Tooltip('reason_text', title='Reason'),
+            alt.Tooltip('valid_reason_cluster:N', title='Cluster')
+        ]
+    ).properties(
+        width=800,
+        height=600,
+        title='UMAP Projection of Valid Divorce Reason Clusters'
+    ).interactive()
+    
+    return chart
+
+# %% Evaluation
+def evaluate_clustering(embeddings, labels):
+    """Evaluate clustering quality"""
+    if len(set(labels)) > 1 and -1 in set(labels):
+        # Silhouette score (excluding noise)
+        valid_mask = np.array(labels) != -1
+        sil_score = silhouette_score(
+            embeddings[valid_mask],
+            labels[valid_mask]
+        )
+        print(f"\nSilhouette Score (valid clusters only): {sil_score:.3f}")
+    else:
+        print("\nNot enough clusters for Silhouette Score calculation")
+
+# %% Main Pipeline
+def main():
+    # 1. Load and prepare data
+    df = load_and_prepare_data()
+    
+    # 2. Preprocess text
+    df = preprocess_text(df)
+    
+    # 3. Extract features
+    df, embeddings = extract_features(df)
+    
+    # 4. Perform clustering
+    umap_embeddings, labels = perform_clustering(embeddings)
+    
+    # 5. Validate clusters
+    df = validate_clusters(df, labels)
+    
+    # 6. Analyze clusters
+    analyze_clusters(df)
+    
+    # 7. Visualize results
+    chart = visualize_clusters(df, umap_embeddings)
+    chart.show()
+    
+    # 8. Evaluate clustering
+    evaluate_clustering(umap_embeddings, df['valid_reason_cluster'].values)
+    
+    return df
+
+if __name__ == "__main__":
+    df = main()
