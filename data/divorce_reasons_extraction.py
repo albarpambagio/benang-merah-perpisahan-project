@@ -360,9 +360,40 @@ def analyze_clusters(df):
         print(f"Cluster {cluster_id}: {', '.join(keywords)}")
         print(f"Sample: {df[df['valid_reason_cluster'] == cluster_id]['reason_text'].iloc[0][:80]}...\n")
 
+# %% Cluster Summary and Manual Review Tools
+
+def cluster_summary(df, n_keywords=5, n_examples=3):
+    print("\nCluster Summary:")
+    for cluster_id in sorted(df['valid_reason_cluster'].unique()):
+        if cluster_id == -1:
+            continue
+        cluster_df = df[df['valid_reason_cluster'] == cluster_id]
+        print(f"\nCluster {cluster_id} (Count: {len(cluster_df)})")
+        # Top keywords
+        vectorizer = TfidfVectorizer(max_features=30, stop_words=LanguageResources.get_stopwords())
+        tfidf = vectorizer.fit_transform(cluster_df['cleaned'].tolist())
+        terms = vectorizer.get_feature_names_out()
+        means = tfidf.mean(axis=0).A1
+        top_idx = means.argsort()[::-1][:n_keywords]
+        keywords = [terms[i] for i in top_idx]
+        print(f"Top keywords: {', '.join(keywords)}")
+        # Example sentences
+        print("Examples:")
+        for ex in cluster_df['reason_text'].head(n_examples):
+            print(f"  - {ex}")
+
+# Helper for top keywords per cluster (for visualization)
+def get_top_keywords(texts, n=3):
+    vectorizer = TfidfVectorizer(max_features=30, stop_words=LanguageResources.get_stopwords())
+    tfidf = vectorizer.fit_transform(texts)
+    terms = vectorizer.get_feature_names_out()
+    means = tfidf.mean(axis=0).A1
+    top_idx = means.argsort()[::-1][:n]
+    return ', '.join([terms[i] for i in top_idx])
+
 # %% Visualization
 def visualize_clusters(df, umap_embeddings):
-    """Create interactive visualization of clusters"""
+    """Create interactive visualization of clusters with top keywords as tooltips"""
     # Prepare 2D UMAP for visualization
     umap_2d = umap.UMAP(
         n_neighbors=Config.UMAP_PARAMS['n_neighbors'],
@@ -371,26 +402,30 @@ def visualize_clusters(df, umap_embeddings):
         random_state=42
     )
     umap_2d_embeddings = umap_2d.fit_transform(umap_embeddings[:, :Config.UMAP_PARAMS['n_components']])
-    
     df['umap_x'] = umap_2d_embeddings[:, 0]
     df['umap_y'] = umap_2d_embeddings[:, 1]
-    
+    # Add a column for top keywords per cluster
+    df['cluster_keywords'] = ''
+    for cluster_id in df['valid_reason_cluster'].unique():
+        if cluster_id == -1:
+            continue
+        mask = df['valid_reason_cluster'] == cluster_id
+        df.loc[mask, 'cluster_keywords'] = get_top_keywords(df.loc[mask, 'cleaned'].tolist())
     # Create Altair chart
     chart = alt.Chart(df[df['valid_reason_cluster'] != -1]).mark_circle(size=60).encode(
         x=alt.X('umap_x', title='UMAP-1'),
         y=alt.Y('umap_y', title='UMAP-2'),
-        color=alt.Color('valid_reason_cluster:N', title='Cluster', 
-                       scale=alt.Scale(scheme='category20')),
+        color=alt.Color('valid_reason_cluster:N', title='Cluster', scale=alt.Scale(scheme='category20')),
         tooltip=[
             alt.Tooltip('reason_text', title='Reason'),
-            alt.Tooltip('valid_reason_cluster:N', title='Cluster')
+            alt.Tooltip('valid_reason_cluster:N', title='Cluster'),
+            alt.Tooltip('cluster_keywords', title='Top Keywords')
         ]
     ).properties(
         width=800,
         height=600,
         title='UMAP Projection of Valid Divorce Reason Clusters'
     ).interactive()
-    
     return chart
 
 # %% Evaluation
@@ -427,7 +462,47 @@ def main():
     # 6. Analyze clusters
     analyze_clusters(df)
     
-    # 7. Visualize results
+    # 6a. Cluster summary for manual review
+    cluster_summary(df)
+    
+    # 6b. Export clustered sentences for manual review
+    df_to_export = df[df['valid_reason_cluster'] != -1][['valid_reason_cluster', 'reason_text']]
+    df_to_export['manual_label'] = ''
+    df_to_export['review_notes'] = ''
+    # Sort by cluster
+    df_to_export = df_to_export.sort_values('valid_reason_cluster')
+
+    # Prepare cluster summaries
+    summary_rows = []
+    for cluster_id in sorted(df_to_export['valid_reason_cluster'].unique()):
+        group = df_to_export[df_to_export['valid_reason_cluster'] == cluster_id]
+        # Get top keywords for this cluster
+        cluster_texts = group['reason_text'].tolist()
+        vectorizer = TfidfVectorizer(max_features=30, stop_words=LanguageResources.get_stopwords())
+        tfidf = vectorizer.fit_transform(cluster_texts)
+        terms = vectorizer.get_feature_names_out()
+        means = tfidf.mean(axis=0).A1
+        top_idx = means.argsort()[::-1][:5]
+        keywords = ', '.join([terms[i] for i in top_idx])
+        summary_row = {
+            'valid_reason_cluster': cluster_id,
+            'reason_text': f'--- CLUSTER SUMMARY: Cluster {cluster_id} | Count: {len(group)} | Top keywords: {keywords} ---',
+            'manual_label': '',
+            'review_notes': ''
+        }
+        summary_rows.append((group.index.min(), summary_row))
+
+    # Insert summary rows at the top of each group
+    for idx, row in sorted(summary_rows, reverse=True):
+        upper = df_to_export.iloc[:idx]
+        lower = df_to_export.iloc[idx:]
+        df_to_export = pd.concat([upper, pd.DataFrame([row]), lower], ignore_index=True)
+
+    # Save the organized file
+    df_to_export.to_csv('clustered_reasons_for_review_organized.csv', index=False)
+    print("\nExported organized clustered reasons to 'clustered_reasons_for_review_organized.csv' for manual review.")
+    
+    # 7. Visualize results (with top keywords in tooltip)
     chart = visualize_clusters(df, umap_embeddings)
     chart.show()
     
@@ -438,3 +513,4 @@ def main():
 
 if __name__ == "__main__":
     df = main()
+# %%
