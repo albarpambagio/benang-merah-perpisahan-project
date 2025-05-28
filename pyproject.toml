@@ -8,6 +8,7 @@ dependencies = [
     "altair>=5.5.0",
     "hdbscan>=0.8.40",
     "jupyter>=1.1.1",
+    "keybert>=0.9.0",
     "lxml>=5.4.0",
     "pymupdf>=1.26.0",
     "scikit-learn>=1.6.1",
