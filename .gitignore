@@ -54,4 +54,4 @@ ETL/*
 !ETL/src/
 
 data/*
-!data/divorce_reasons_extraction.py
+!data/*.py
