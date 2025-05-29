@@ -12,6 +12,7 @@ import logging
 from tqdm import tqdm
 import os
 from datetime import datetime
+from sklearn.calibration import CalibratedClassifierCV
 
 # Import shared utilities
 from divorce_utils import load_data, get_tfidf_features, get_transformer_embeddings, combine_features, plot_evaluation
@@ -63,7 +64,11 @@ def train_model_step(X_train_comb, y_train):
     grid.fit(X_train_comb, y_train)
     log.info(f"Best params: {grid.best_params_}")
     clf_best = grid.best_estimator_
-    return clf_best
+    # Calibrate probabilities
+    log.info("Calibrating probabilities with isotonic regression...")
+    calibrated_clf = CalibratedClassifierCV(estimator=clf_best, method='isotonic', cv=3)
+    calibrated_clf.fit(X_train_comb, y_train)
+    return calibrated_clf
 
 # %%
 def export_model_report(y_test, y_pred, y_proba, report_dir="report"):
@@ -119,8 +124,8 @@ def main(data_path: str = None) -> None:
     If data_path is None, use the default CSV path.
     """
     DATA_PATH = data_path or 'annotated_divorce_reason_sample_for_labelstudio.csv'
-    MODEL_PATH = 'divorce_reason_rf_classifier.joblib'
-    VECTORIZER_PATH = 'divorce_reason_rf_vectorizer.joblib'
+    MODEL_PATH = 'model/divorce_reason_rf_classifier.joblib'
+    VECTORIZER_PATH = 'model/divorce_reason_rf_vectorizer.joblib'
     # Step 1: Load data
     df = load_data_step(DATA_PATH)
     # Step 2: Split data

@@ -50,12 +50,12 @@ def get_tfidf_features(X_train: pd.Series, X_test: pd.Series) -> Tuple[TfidfVect
 # Embedding Generation
 from sentence_transformers import SentenceTransformer
 
-def get_transformer_embeddings(X_train: pd.Series, X_test: pd.Series = None, model_name: str = "firqaaa/indo-sentence-bert-base"):
-    """Get transformer embeddings for train and optionally test data."""
+def get_transformer_embeddings(X_train: pd.Series, X_test: pd.Series = None, model_name: str = "firqaaa/indo-sentence-bert-base", batch_size: int = 32):
+    """Get transformer embeddings for train and optionally test data, with batching."""
     model = SentenceTransformer(model_name)
-    X_train_emb = model.encode(X_train.tolist(), show_progress_bar=True)
+    X_train_emb = model.encode(X_train.tolist(), show_progress_bar=True, batch_size=batch_size)
     if X_test is not None:
-        X_test_emb = model.encode(X_test.tolist(), show_progress_bar=True)
+        X_test_emb = model.encode(X_test.tolist(), show_progress_bar=True, batch_size=batch_size)
         return X_train_emb, X_test_emb
     else:
         return X_train_emb

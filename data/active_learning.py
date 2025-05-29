@@ -13,6 +13,22 @@ from divorce_reasons_extraction import TextExtractor
 import os
 from datetime import datetime
 
+# Ensure spaCy model is installed
+import spacy
+import subprocess
+import sys
+
+# %%
+def ensure_spacy_model(model_name="xx_sent_ud_sm"):
+    try:
+        spacy.load(model_name)
+    except OSError:
+        print(f"spaCy model '{model_name}' not found. Installing...")
+        subprocess.check_call([sys.executable, "-m", "spacy", "download", model_name])
+        print(f"spaCy model '{model_name}' installed.")
+
+ensure_spacy_model()
+
 # %%
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,7 +90,7 @@ def load_model_and_vectorizer(model_path, vectorizer_path):
 # --- Step 5: Compute Uncertainty and Model Label ---
 def compute_uncertainty_and_label(df_unlabeled, model, vectorizer):
     X_tfidf = vectorizer.transform(df_unlabeled['reason_text'])
-    X_emb = get_transformer_embeddings(df_unlabeled['reason_text'])
+    X_emb = get_transformer_embeddings(df_unlabeled['reason_text'], batch_size=32)
     X = combine_features(X_tfidf, X_emb)
     if hasattr(X, "toarray"):
         X = X.toarray()
@@ -132,13 +148,13 @@ def main():
     parser = argparse.ArgumentParser(description="Semi-Automated Active Learning for Divorce Reason Classification")
     parser.add_argument('--unlabeled', required=True, help='Path to unlabeled data (jsonl or csv)')
     parser.add_argument('--labeled', required=True, help='Path to labeled data (csv)')
-    parser.add_argument('--model', default='divorce_reason_rf_classifier.joblib', help='Path to trained model')
-    parser.add_argument('--vectorizer', default='divorce_reason_rf_vectorizer.joblib', help='Path to vectorizer')
+    parser.add_argument('--model', default='model/divorce_reason_rf_classifier.joblib', help='Path to trained model')
+    parser.add_argument('--vectorizer', default='model/divorce_reason_rf_vectorizer.joblib', help='Path to vectorizer')
     parser.add_argument('--output_auto', default='active_learning_auto_labeled.csv', help='Output CSV for auto-labeled samples')
     parser.add_argument('--output_human', default='active_learning_human_review.csv', help='Output CSV for human review samples')
     parser.add_argument('--report', default='report', help='Directory for summary report')
     parser.add_argument('-n', type=int, default=20, help='Number of human review samples to select')
-    parser.add_argument('--threshold', type=float, default=0.95, help='Confidence threshold for auto-labeling')
+    parser.add_argument('--threshold', type=float, default=0.7, help='Confidence threshold for auto-labeling')
     parser.add_argument('--num_sentences', type=int, default=None, help='Number of candidate sentences to process (for testing)')
     args = parser.parse_args()
 

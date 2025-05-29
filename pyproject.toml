@@ -9,7 +9,6 @@ dependencies = [
     "hdbscan>=0.8.40",
     "jupyter>=1.1.1",
     "keybert>=0.9.0",
-    "label-studio>=1.18.0",
     "lxml>=5.4.0",
     "nltk>=3.9.1",
     "pymupdf>=1.26.0",
