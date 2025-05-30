@@ -17,6 +17,16 @@ from sklearn.calibration import CalibratedClassifierCV
 # Import shared utilities
 from divorce_utils import load_data, get_tfidf_features, get_transformer_embeddings, combine_features, plot_evaluation
 
+# Print device info (GPU/CPU)
+try:
+    import torch
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("Using CPU (no GPU detected)")
+except ImportError:
+    print("Torch not installed, device info unavailable.")
+
 # %%
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

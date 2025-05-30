@@ -29,6 +29,16 @@ def ensure_spacy_model(model_name="xx_sent_ud_sm"):
 
 ensure_spacy_model()
 
+# Print device info (GPU/CPU)
+try:
+    import torch
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("Using CPU (no GPU detected)")
+except ImportError:
+    print("Torch not installed, device info unavailable.")
+
 # %%
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
