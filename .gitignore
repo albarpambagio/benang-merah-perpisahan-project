@@ -58,3 +58,4 @@ data/*
 
 paper/docs
 paper/paper writing implementation plan.md:Zone.Identifier
+!paper/todo.md
