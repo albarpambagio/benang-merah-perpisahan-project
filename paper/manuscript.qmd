@@ -1,0 +1,80 @@
+---
+title: "A Curated Dataset of Indonesian Divorce Court Decisions: Collection, Characteristics, and Research Potential" # Max 20 words. This example is 15 words.
+author:
+  - name: "Full Name of First Writer (not abbreviated)"
+    affiliation: "Study Program, Faculty, University, City, State (as per JMST template)" # [cite: 1]
+    email: "email1@example.com"
+  - name: "Full Name of Second Writer (not abbreviated)"
+    affiliation: "Study Program, Faculty, University, City, State (as per JMST template)" # [cite: 1]
+    email: "email2@example.com"
+  # Add more authors as needed (minimum 2 authors required). Ensure full names and emails. [cite: 6]
+abstract: |
+  (Content for English abstract goes here. Maximum 250 words using Arial Narrow size 11 pt, and space 1[cite: 1]. Your plan mentioned up to 300 words; please verify the journal's current limit.)
+  **Purpose of Study:** Clearly state the aim to create, describe, and present a comprehensive dataset of Indonesian divorce court decisions for research purposes. (Abstract should cover topic, objectives, research methods, and research results [cite: 1])
+  **Data Collecting Technique:** Detail the ETL (Extraction, Transformation, Load) process from the Mahkamah Agung directory, including data sources, scraping methods, metadata extraction, and PDF collection.
+  **Result of the Study:** Describe the resulting dataset – its size (~9440 records), the nature of the data (metadata and PDF documents), key characteristics identified (e.g., temporal scope, types of information available), and its organized structure.
+keywords: ["court decisions", "dataset", "divorce", "indonesia", "legal informatics", "text mining"] # Written in lowercase letters consisting of 3-5 keywords, size 11 pt[cite: 4]. Your plan suggests up to 6. Please verify. Keywords should represent the concept of the article and make it easy for search engines[cite: 2, 7].
+language: en
+
+format:
+  html:
+    toc: true
+    # For HTML output, specific fonts (Arial Narrow) and point sizes would be managed with a custom CSS file.
+    # Text alignment (justify) can also be set via CSS.
+  pdf:
+    documentclass: article, 12pt # Uses a 12-point font.
+    papersize: a4
+    # geometry: "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm" # Example margins (ensure they fit JMST template [cite: 10])
+    header-includes:
+      - "\\usepackage{fancyhdr}"
+      - "\\pagestyle{fancy}"
+      - "\\fancyhf{}" # clear all header and footer fields
+      - "\\cfoot{\\thepage}" # page number in the center of the footer
+      - "\\renewcommand{\\headrulewidth}{0pt}" # remove header rule
+      # To use Arial Narrow (or a close alternative like Helvetica) in PDF,
+      # you might need to specify a LaTeX font package.
+      # - "\\usepackage{helvet}" # Example for Helvetica
+      # - "\\renewcommand{\\familydefault}{\\sfdefault}"
+    # Justify text is often default in LaTeX.
+  docx:
+    # The submission file can be in OpenOffice, Microsoft Word, or RTF document file format.
+    # Quarto's docx output is generally compatible.
+    # reference-doc: template.docx # If you have a .docx to style against for precise JMST Word format.
+
+# General Adherence Notes:
+# - Language: English.
+# - JMST Template: This Quarto file structures content based on JMST. Formatting details from original JMST template should be cross-checked.
+# - Page Numbers: Middle of the bottom (handled for PDF via header-includes).
+# - Word Count: Target well over 4000 words (including everything) as per your plan.
+# - Submission File Format: OpenOffice, Microsoft Word, or RTF document file format.
+
+bibliography: references.bib # Create a references.bib file for your citations
+csl: apa.csl # Use APA style (download an APA CSL file). Reference writing should use applications like Mendeley, Zotero, Endnote, etc., and use APA style format[cite: 14].
+# Ensure a minimum of 25 relevant academic references (as per your plan). Original JMST: min 15 references from publications of the last 10 years from credible journals[cite: 15].
+
+---
+
+# INTRODUCTION
+(Content of the introduction goes here...)
+
+# METHOD
+(Content of the method section goes here...)
+
+# RESULTS AND DISCUSSION
+## Result of the Study (Dataset Characteristics)
+(Content for describing the dataset characteristics goes here...)
+
+## Discussion
+(Content for discussing the results, comparing with literature, significance, limitations, and implications goes here...)
+
+# CONCLUSION
+(Content of the conclusion goes here...)
+
+# ACKNOWLEDGEMENTS
+(Content of acknowledgements goes here, if any...)
+
+# REFERENCES
+::: {#refs}
+:::
+
+# APPENDIX (Optional)

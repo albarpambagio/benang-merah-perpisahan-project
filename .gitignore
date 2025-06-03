@@ -55,3 +55,6 @@ ETL/*
 
 data/*
 !data/*.py
+
+paper/docs
+paper/paper writing implementation plan.md:Zone.Identifier
