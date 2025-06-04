@@ -1,20 +1,24 @@
 ---
-title: "A Curated Dataset of Indonesian Divorce Court Decisions: Collection, Characteristics, and Research Potential" # Max 20 words. This example is 15 words.
+[cite_start]title: "ARTICLE TITLE (Bahasa Indonesia or English, Max 20 Words)" # Choose one language. 
 author:
-  - name: "Full Name of First Writer (not abbreviated)"
-    affiliation: "Study Program, Faculty, University, City, State (as per JMST template)" # [cite: 1]
-    email: "email1@example.com"
-  - name: "Full Name of Second Writer (not abbreviated)"
-    affiliation: "Study Program, Faculty, University, City, State (as per JMST template)" # [cite: 1]
-    email: "email2@example.com"
-  # Add more authors as needed (minimum 2 authors required). Ensure full names and emails. [cite: 6]
-abstract: |
-  (Content for English abstract goes here. Maximum 250 words using Arial Narrow size 11 pt, and space 1[cite: 1]. Your plan mentioned up to 300 words; please verify the journal's current limit.)
-  **Purpose of Study:** Clearly state the aim to create, describe, and present a comprehensive dataset of Indonesian divorce court decisions for research purposes. (Abstract should cover topic, objectives, research methods, and research results [cite: 1])
-  **Data Collecting Technique:** Detail the ETL (Extraction, Transformation, Load) process from the Mahkamah Agung directory, including data sources, scraping methods, metadata extraction, and PDF collection.
-  **Result of the Study:** Describe the resulting dataset – its size (~9440 records), the nature of the data (metadata and PDF documents), key characteristics identified (e.g., temporal scope, types of information available), and its organized structure.
-keywords: ["court decisions", "dataset", "divorce", "indonesia", "legal informatics", "text mining"] # Written in lowercase letters consisting of 3-5 keywords, size 11 pt[cite: 4]. Your plan suggests up to 6. Please verify. Keywords should represent the concept of the article and make it easy for search engines[cite: 2, 7].
-language: en
+  - [cite_start]name: "Full Name of First Writer (not abbreviated)" # 
+    affiliation: "Study Program, Faculty, University, City, State" # 
+    email: "email1@example.com" # 
+  - name: "Full Name of Second Writer (not abbreviated)" # 
+    affiliation: "Study Program, Faculty, University, City, State" # 
+    email: "email2@example.com" # 
+  # Add more authors as needed (minimum 2 authors required) 
+# English Abstract & Keywords
+abstract: | # This will be treated as the primary abstract (English)
+  (English abstract content here. Not more than 300 words. Include: Purpose of study, Data collecting technique, Result of the study.) 
+keywords: ["english keyword1", "english keyword2", "english keyword3"] # English, max 6 words, alphabetical. 
+
+# Bahasa Indonesia Abstract & Keywords (Custom fields)
+abstract_bahasa_indonesia: |
+  [cite_start](Bahasa Indonesia abstract content here. Tidak lebih dari 300 kata. Termasuk: Tujuan penelitian, Teknik pengumpulan data, Hasil penelitian.) 
+[cite_start]keywords_bahasa_indonesia: ["kata kunci1 indonesia", "kata kunci2 indonesia", "kata kunci3 indonesia"] # Bahasa Indonesia, maks 6 kata, urut abjad. 
+
+[cite_start]language: en # Primary language of the manuscript 
 
 format:
   html:
@@ -24,12 +28,12 @@ format:
   pdf:
     documentclass: article, 12pt # Uses a 12-point font.
     papersize: a4
-    # geometry: "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm" # Example margins (ensure they fit JMST template [cite: 10])
+    # geometry: "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm" # Example margins (ensure they fit JMST template)
     header-includes:
       - "\\usepackage{fancyhdr}"
       - "\\pagestyle{fancy}"
       - "\\fancyhf{}" # clear all header and footer fields
-      - "\\cfoot{\\thepage}" # page number in the center of the footer
+      - "\\cfoot{\\thepage}" # page number in the center of the footer 
       - "\\renewcommand{\\headrulewidth}{0pt}" # remove header rule
       # To use Arial Narrow (or a close alternative like Helvetica) in PDF,
       # you might need to specify a LaTeX font package.
@@ -39,18 +43,30 @@ format:
   docx:
     # The submission file can be in OpenOffice, Microsoft Word, or RTF document file format.
     # Quarto's docx output is generally compatible.
-    # reference-doc: template.docx # If you have a .docx to style against for precise JMST Word format.
+    # reference-doc: jmst_template.docx # Use an official JMST .docx template as reference if available for precise styling 
 
-# General Adherence Notes:
-# - Language: English.
-# - JMST Template: This Quarto file structures content based on JMST. Formatting details from original JMST template should be cross-checked.
-# - Page Numbers: Middle of the bottom (handled for PDF via header-includes).
-# - Word Count: Target well over 4000 words (including everything) as per your plan.
-# - Submission File Format: OpenOffice, Microsoft Word, or RTF document file format.
+# General JMST Adherence Notes:
+# [cite_start]- Manuscript in English. 
+# [cite_start]- No less than 4000 words including references, appendices, tables, and figures. 
+# [cite_start]- Minimum 2 authors. 
+# [cite_start]- Page numbers: middle of the bottom. 
+# [cite_start]- Title: Bahasa Indonesia or English, max 20 words. 
+# [cite_start]- Author names: Full, not abbreviated, with email for each. 
+# [cite_start]- Adherence to JMST Template is mandatory. 
 
 bibliography: references.bib # Create a references.bib file for your citations
-csl: apa.csl # Use APA style (download an APA CSL file). Reference writing should use applications like Mendeley, Zotero, Endnote, etc., and use APA style format[cite: 14].
-# Ensure a minimum of 25 relevant academic references (as per your plan). Original JMST: min 15 references from publications of the last 10 years from credible journals[cite: 15].
+[cite_start]csl: apa.csl # APA Style 
+# [cite_start]Minimum number of 25 references. 
+# Reference writing should use applications like Mendeley, Zotero, Endnote, etc.
+# Where available, URLs for the references should be provided.
+---
+
+---
+**Abstrak (Bahasa Indonesia)**
+
+{{< meta abstract_bahasa_indonesia >}}
+
+**Kata Kunci (Bahasa Indonesia):** {{< meta keywords_bahasa_indonesia >}}
 
 ---
 

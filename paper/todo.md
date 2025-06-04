@@ -1,29 +1,24 @@
-Okay, here's a to-do list based on the refined implementation plan, designed to guide you through the process of writing your paper for JMST:
-
 **Phase 1: Setup and Initial Drafting**
 
 * **Overall Manuscript Preparation:**
-    * [ ] **Obtain JMST Template:** Download the official JMST Word document template.
+    * [x] **Obtain JMST Template:** Download the official JMST Word document template.
     * [ ] **Set up Project Folder:** Create a dedicated folder for your manuscript, including subfolders for figures, data (if any used for generating figures in the paper), and your bibliography file.
     * [ ] **Familiarize with Quarto (if using for drafting before template):** Ensure Quarto is set up and you know how to manage content, citations, and potentially export to a format that can be easily transferred to the JMST Word template. *Alternatively, draft directly in the JMST template.*
     * [ ] **Identify 2nd Author (and any others):** Confirm all co-authors and gather their full names and email addresses.
 
 * **Title Page Elements (JMST Template):**
     * [ ] Draft English Title (max 20 words).
-    * [ ] Draft Bahasa Indonesia Title (max 20 words).
     * [ ] List all authors' full names (no abbreviations).
     * [ ] List all authors' email addresses.
     * [ ] Add affiliations as per template.
 
 * **Abstract and Keywords (JMST Template):**
     * [ ] Draft English Abstract (max 300 words: Purpose, Data Collecting Technique, Result).
-    * [ ] Translate English Abstract to Bahasa Indonesia (max 300 words).
     * [ ] Select English Keywords (max 6, alphabetical).
-    * [ ] Select Bahasa Indonesia Keywords (max 6, alphabetical, translations of English keywords).
 
 * **References:**
-    * [ ] **Create Bibliography File:** Start a `bibliography.bib` file (if using Quarto/Zotero/Mendeley) or a list for manual APA formatting.
-    * [ ] **Initial Reference Gathering:** Begin collecting key papers related to legal datasets, divorce studies, Indonesian law, and computational methods (aim for an initial 10-15, will expand to 25+).
+    * [x] **Create Bibliography File:** Start a `bibliography.bib` file (if using Quarto/Zotero/Mendeley) or a list for manual APA formatting.
+    * [x] **Initial Reference Gathering:** Begin collecting key papers related to legal datasets, divorce studies, Indonesian law, and computational methods (aim for an initial 10-15, will expand to 25+).
 
 **Phase 2: Core Content Development – Section by Section**
 
@@ -95,5 +90,3 @@ Okay, here's a to-do list based on the refined implementation plan, designed to 
     * [ ] One last read-through of the entire manuscript.
     * [ ] Confirm all JMST guideline points have been addressed.
     * [ ] Ensure all files are correctly named and prepared for submission.
-
-This to-do list should help you stay organized. Remember to tackle it step-by-step and allocate sufficient time for each phase, especially the detailed drafting and the crucial "Result and Discussion" section. Good luck!
